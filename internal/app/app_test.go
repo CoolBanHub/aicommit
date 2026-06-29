@@ -1,0 +1,207 @@
+package app
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/CoolBanHub/aicommit/internal/filter"
+)
+
+func TestRunCommitBlocksForcedStagedFileIgnoredByGitignore(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	writeFile(t, repo, ".gitignore", "*.png\n")
+	runGit(t, repo, "add", ".gitignore")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	writeFile(t, repo, "image.png", "text placeholder\n")
+	writeFile(t, repo, "app.txt", "code\n")
+	runGit(t, repo, "add", "-f", "image.png")
+	runGit(t, repo, "add", "app.txt")
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Message:    "Add app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NoChanges {
+		t.Fatalf("expected allowed changes to be committed")
+	}
+	if !containsDecision(result.StagedProtected, "image.png", "ignored by .gitignore") {
+		t.Fatalf("expected image.png to be unstaged as ignored, got %#v", result.StagedProtected)
+	}
+	if contains(result.Files, "image.png") {
+		t.Fatalf("image.png should not be part of the generated commit: %#v", result.Files)
+	}
+	if !contains(result.Files, "app.txt") {
+		t.Fatalf("app.txt should be committed: %#v", result.Files)
+	}
+
+	headFiles := gitOutput(t, repo, "show", "--name-only", "--format=", "HEAD")
+	if strings.Contains(headFiles, "image.png") {
+		t.Fatalf("ignored file was committed:\n%s", headFiles)
+	}
+	if !strings.Contains(headFiles, "app.txt") {
+		t.Fatalf("allowed file was not committed:\n%s", headFiles)
+	}
+	if cached := strings.TrimSpace(gitOutput(t, repo, "diff", "--cached", "--name-only")); cached != "" {
+		t.Fatalf("expected clean index after commit, got %q", cached)
+	}
+}
+
+func TestRunCommitBlocksTrackedFileCoveredByGitignore(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	writeFile(t, repo, "image.png", "old\n")
+	runGit(t, repo, "add", "image.png")
+	runGit(t, repo, "commit", "-m", "track image")
+
+	writeFile(t, repo, ".gitignore", "*.png\n")
+	runGit(t, repo, "add", ".gitignore")
+	runGit(t, repo, "commit", "-m", "ignore png")
+
+	writeFile(t, repo, "image.png", "new\n")
+	writeFile(t, repo, "app.txt", "code\n")
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Message:    "Add app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NoChanges {
+		t.Fatalf("expected allowed changes to be committed")
+	}
+	if !containsDecision(result.UnstagedProtected, "image.png", "ignored by .gitignore") {
+		t.Fatalf("expected modified tracked image.png to be skipped as ignored, got %#v", result.UnstagedProtected)
+	}
+	if contains(result.Files, "image.png") {
+		t.Fatalf("image.png should not be part of the generated commit: %#v", result.Files)
+	}
+
+	headFiles := gitOutput(t, repo, "show", "--name-only", "--format=", "HEAD")
+	if strings.Contains(headFiles, "image.png") {
+		t.Fatalf("ignored tracked file modification was committed:\n%s", headFiles)
+	}
+	headImage := gitOutput(t, repo, "show", "HEAD:image.png")
+	if headImage != "old\n" {
+		t.Fatalf("expected HEAD image.png to remain unchanged, got %q", headImage)
+	}
+	status := gitOutput(t, repo, "status", "--porcelain=v1", "--", "image.png")
+	if !strings.Contains(status, " M image.png") {
+		t.Fatalf("expected image.png to remain modified in worktree, got %q", status)
+	}
+}
+
+func TestRunCommitAnchorsDetectedRootBinaryWithoutIgnoringCommandSourceDir(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	writeBytes(t, repo, "aicommit", []byte{0, 1, 2, 3})
+	writeFile(t, repo, "cmd/aicommit/main.go", "package main\n\nfunc main() {}\n")
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Message:    "Add CLI source",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NoChanges {
+		t.Fatalf("expected source changes to be committed")
+	}
+	if !containsDecision(result.Skipped, "aicommit", "binary file") {
+		t.Fatalf("expected root binary to be skipped, got %#v", result.Skipped)
+	}
+	if !contains(result.Files, "cmd/aicommit/main.go") {
+		t.Fatalf("expected command source to be committed, got %#v", result.Files)
+	}
+	if contains(result.Files, "aicommit") {
+		t.Fatalf("root binary should not be committed, got %#v", result.Files)
+	}
+
+	gitignore := gitOutput(t, repo, "show", "HEAD:.gitignore")
+	if !strings.Contains(gitignore, "\n/aicommit\n") {
+		t.Fatalf("expected anchored root binary ignore pattern, got:\n%s", gitignore)
+	}
+	if strings.Contains(gitignore, "\naicommit\n") {
+		t.Fatalf("unanchored pattern would ignore cmd/aicommit, got:\n%s", gitignore)
+	}
+}
+
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "config", "user.email", "tester@example.com")
+	runGit(t, repo, "config", "user.name", "Tester")
+	runGit(t, repo, "config", "commit.gpgsign", "false")
+	return repo
+}
+
+func writeFile(t *testing.T, repo, rel, contents string) {
+	t.Helper()
+	path := filepath.Join(repo, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeBytes(t *testing.T, repo, rel string, contents []byte) {
+	t.Helper()
+	path := filepath.Join(repo, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runGit(t *testing.T, repo string, args ...string) {
+	t.Helper()
+	_ = gitOutput(t, repo, args...)
+}
+
+func gitOutput(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(out))
+	}
+	return string(out)
+}
+
+func containsDecision(items []filter.Decision, path, reason string) bool {
+	for _, item := range items {
+		if item.Path == path && item.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}

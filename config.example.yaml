@@ -1,0 +1,43 @@
+provider: auto
+push: never
+style: Follow Conventional Commits when possible.
+maxDiffChars: 120000
+maxFileBytes: 2097152
+disableGPGSign: true
+protect:
+  include: []
+  exclude:
+    - "*.log"
+    - "tmp/**"
+providers:
+  openai:
+    type: openai
+    baseURL: https://api.openai.com/v1
+    apiKeyEnv: OPENAI_API_KEY
+    model: gpt-5.4-mini
+  deepseek:
+    type: openai-compatible
+    baseURL: https://api.deepseek.com
+    apiKeyEnv: DEEPSEEK_API_KEY
+    model: deepseek-v4-flash
+  anthropic:
+    type: anthropic
+    baseURL: https://api.anthropic.com/v1
+    apiKeyEnv: ANTHROPIC_API_KEY
+    model: claude-haiku-4-5-20251001
+  codex:
+    type: codex-cli
+    model: ""
+  claude-code:
+    type: claude-code-cli
+    model: sonnet
+  cdp:
+    type: command
+    commandEnv: AICOMMIT_CDP_COMMAND
+    modelEnv: AICOMMIT_CDP_MODEL
+  command:
+    type: command
+    command:
+      - sh
+      - -c
+      - cat | your-generator
