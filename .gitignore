@@ -68,3 +68,9 @@ vendor/
 # Added by aicommit after detecting protected files
 /aicommit
 /main
+
+# Added by aicommit after detecting protected files
+/bin/aicommit-darwin-amd64
+/bin/aicommit-darwin-arm64
+/bin/aicommit-linux-amd64
+/bin/aicommit-linux-arm64
