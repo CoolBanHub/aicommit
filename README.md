@@ -31,8 +31,13 @@ curl -fsSL https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.sh
 ```
 
 脚本会自动识别操作系统和架构，下载对应的二进制文件（如 `aicommit-darwin-arm64`），
-重命名为 `aicommit` 并安装为全局命令。默认安装到 `/usr/local/bin`；
-无写权限时安装到 `~/.local/bin`。
+重命名为 `aicommit` 并安装为全局命令。
+
+执行脚本后，二进制程序会安装到：
+
+- `/usr/local/bin/aicommit`：当 `/usr/local/bin` 存在且当前用户有写权限时。
+- `~/.local/bin/aicommit`：当 `/usr/local/bin` 不可写时。
+- `<自定义目录>/aicommit`：使用 `--dir` 指定安装目录时。
 
 也可以手动指定版本或安装目录：
 
@@ -40,28 +45,14 @@ curl -fsSL https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.sh
 curl -fsSL https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.sh | sh -s -- --version v0.0.1 --dir ~/.local/bin
 ```
 
-> 仓库为**私有**时，匿名下载会失败（404）。请先设置一个具备 `repo` 读权限的 token，
-> 并在**拉取脚本**和**下载二进制**时都带上它（脚本会自动读取环境变量中的 `GITHUB_TOKEN`）：
-> ```bash
-> export GITHUB_TOKEN=ghp_xxx
-> curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
->   https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.sh | sh
-> ```
-
 ### Windows（PowerShell）
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.ps1 | iex
 ```
 
-脚本会将 `aicommit.exe` 安装到 `%USERPROFILE%\.aicommit\bin` 并加入用户 PATH。
-打开新终端后即可使用 `aicommit`。
-
-> 私有仓库：先设置 `$env:GITHUB_TOKEN = 'ghp_xxx'`，再用带认证头的方式拉取脚本：
-> ```powershell
-> $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
-> (iwr -useb -Headers $h https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.ps1).Content | iex
-> ```
+执行脚本后，二进制程序会安装到 `%USERPROFILE%\.aicommit\bin\aicommit.exe`。
+脚本会将 `%USERPROFILE%\.aicommit\bin` 加入用户 PATH；打开新终端后即可使用 `aicommit`。
 
 ### 手动下载
 
