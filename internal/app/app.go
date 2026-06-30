@@ -218,6 +218,19 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 	message := strings.TrimSpace(opts.Message)
 	providerName := cfg.Provider
 	model := cfg.Model
+
+	generatedFiles := filter.MatchGeneratedFiles(files, cfg.Generated.Patterns)
+	generatedOnly := len(files) > 0 && len(generatedFiles) == len(files)
+
+	if message == "" && generatedOnly {
+		message = strings.TrimSpace(cfg.Generated.Message)
+		if message == "" {
+			message = "chore: update generated files"
+		}
+		result.Provider = "generated"
+		result.Metadata["generatedFiles"] = "true"
+	}
+
 	if message == "" {
 		provider, resolved, err := ai.NewProvider(ai.FactoryConfig{
 			Provider:  providerName,
@@ -230,16 +243,17 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 		result.Provider = resolved.Name
 		result.Model = resolved.Model
 		message, err = provider.GenerateCommitMessage(ctx, ai.CommitRequest{
-			RepoRoot: repoRoot,
-			Files:    files,
-			Stat:     stat,
-			Diff:     diff,
-			Style:    cfg.Style,
+			RepoRoot:       repoRoot,
+			Files:          files,
+			Stat:           stat,
+			Diff:           diff,
+			Style:          cfg.Style,
+			GeneratedFiles: generatedFiles,
 		})
 		if err != nil {
 			return CommitResult{}, err
 		}
-	} else {
+	} else if opts.Message != "" {
 		result.Provider = "manual"
 	}
 	message = ai.NormalizeCommitMessage(message)

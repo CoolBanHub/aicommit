@@ -60,3 +60,69 @@ func TestRulesDetectsBinaryContent(t *testing.T) {
 		t.Fatalf("expected binary file to be protected")
 	}
 }
+
+func TestMatchGeneratedFiles(t *testing.T) {
+	tests := []struct {
+		name     string
+		files    []string
+		patterns []string
+		want     []string
+	}{
+		{
+			name:     "no patterns",
+			files:    []string{"test.pb.go"},
+			patterns: nil,
+			want:     nil,
+		},
+		{
+			name:     "all match",
+			files:    []string{"test.pb.go", "api.pb.go"},
+			patterns: []string{"*.pb.go"},
+			want:     []string{"test.pb.go", "api.pb.go"},
+		},
+		{
+			name:     "partial match",
+			files:    []string{"test.pb.go", "handler.go"},
+			patterns: []string{"*.pb.go"},
+			want:     []string{"test.pb.go"},
+		},
+		{
+			name:     "no match",
+			files:    []string{"handler.go", "service.go"},
+			patterns: []string{"*.pb.go"},
+			want:     nil,
+		},
+		{
+			name:     "multiple patterns",
+			files:    []string{"test.pb.go", "mock_db.go", "handler.go"},
+			patterns: []string{"*.pb.go", "mock_*.go"},
+			want:     []string{"test.pb.go", "mock_db.go"},
+		},
+		{
+			name:     "basename glob matches nested files",
+			files:    []string{"internal/api/test.pb.go", "internal/api/handler.go"},
+			patterns: []string{"*.pb.go"},
+			want:     []string{"internal/api/test.pb.go"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MatchGeneratedFiles(tt.files, tt.patterns)
+			if !slicesEqual(got, tt.want) {
+				t.Errorf("MatchGeneratedFiles() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

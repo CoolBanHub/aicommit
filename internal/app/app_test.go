@@ -141,6 +141,99 @@ func TestRunCommitAnchorsDetectedRootBinaryWithoutIgnoringCommandSourceDir(t *te
 	}
 }
 
+func TestRunCommitUsesConfiguredMessageForGeneratedOnlyChanges(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, configPath, `provider: cdp
+generated:
+  patterns:
+    - "*.pb.go"
+  message: "chore: refresh generated files"
+`)
+	t.Setenv("AICOMMIT_CDP_COMMAND", "exit 42")
+
+	writeFile(t, repo, ".gitignore", "# baseline\n")
+	runGit(t, repo, "add", ".gitignore")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	writeFile(t, repo, "api.pb.go", "package api\n")
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		DryRun:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Provider != "generated" {
+		t.Fatalf("expected generated provider, got %q", result.Provider)
+	}
+	if result.Message != "chore: refresh generated files" {
+		t.Fatalf("unexpected message %q", result.Message)
+	}
+	if result.Metadata["generatedFiles"] != "true" {
+		t.Fatalf("expected generatedFiles metadata, got %#v", result.Metadata)
+	}
+	if !contains(result.Files, "api.pb.go") {
+		t.Fatalf("expected generated file to be staged, got %#v", result.Files)
+	}
+}
+
+func TestRunCommitPassesGeneratedFilesToProviderForMixedChanges(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, configPath, `provider: cdp
+generated:
+  patterns:
+    - "*.pb.go"
+  message: "chore: refresh generated files"
+`)
+	promptPath := filepath.Join(t.TempDir(), "prompt.txt")
+	t.Setenv("PROMPT_CAPTURE", promptPath)
+	t.Setenv("AICOMMIT_CDP_COMMAND", `cat > "$PROMPT_CAPTURE"; printf '{"message":"feat: update handler"}'`)
+
+	writeFile(t, repo, ".gitignore", "# baseline\n")
+	runGit(t, repo, "add", ".gitignore")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	writeFile(t, repo, "api.pb.go", "package api\n")
+	writeFile(t, repo, "handler.go", "package api\n")
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		DryRun:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Provider != "cdp" {
+		t.Fatalf("expected cdp provider, got %q", result.Provider)
+	}
+	if result.Message != "feat: update handler" {
+		t.Fatalf("unexpected message %q", result.Message)
+	}
+	if result.Metadata["generatedFiles"] == "true" {
+		t.Fatalf("did not expect generated-only metadata for mixed changes")
+	}
+
+	promptData, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := string(promptData)
+	if !strings.Contains(prompt, "Generated files (auto-generated, focus changes on other files):") {
+		t.Fatalf("expected generated-files note in prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "api.pb.go") {
+		t.Fatalf("expected generated file in prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "handler.go") {
+		t.Fatalf("expected non-generated file in prompt:\n%s", prompt)
+	}
+}
+
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -154,6 +247,16 @@ func initGitRepo(t *testing.T) string {
 func writeFile(t *testing.T, repo, rel, contents string) {
 	t.Helper()
 	path := filepath.Join(repo, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeConfigFile(t *testing.T, path, contents string) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

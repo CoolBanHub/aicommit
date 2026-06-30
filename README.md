@@ -60,8 +60,9 @@ Supported provider names:
 - `cdp`: command/protocol bridge provider; set `AICOMMIT_CDP_COMMAND`.
 - `command`: custom command adapter for CDP or any local generator.
 
-`auto` chooses the first available option in this order: OpenAI key, DeepSeek
-key, Anthropic key, local Codex CLI, local Claude Code CLI.
+`auto` chooses the first available option in this order: local Claude Code CLI,
+local Codex CLI, OpenAI, Anthropic, DeepSeek. For OpenAI-compatible and
+Anthropic providers, leaving `baseURL` empty uses the official endpoint.
 
 Default models can be overridden with flags or environment variables:
 

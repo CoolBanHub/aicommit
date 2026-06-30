@@ -14,6 +14,10 @@ const (
 	PushAuto   = "auto"
 	PushAlways = "always"
 	PushNever  = "never"
+
+	DefaultOpenAIBaseURL    = "https://api.openai.com/v1"
+	DefaultDeepSeekBaseURL  = "https://api.deepseek.com"
+	DefaultAnthropicBaseURL = "https://api.anthropic.com/v1"
 )
 
 type Config struct {
@@ -25,12 +29,18 @@ type Config struct {
 	MaxFileBytes   int64                     `json:"maxFileBytes" yaml:"maxFileBytes"`
 	DisableGPGSign bool                      `json:"disableGPGSign" yaml:"disableGPGSign"`
 	Protect        ProtectConfig             `json:"protect" yaml:"protect"`
+	Generated      GeneratedConfig           `json:"generated" yaml:"generated"`
 	Providers      map[string]ProviderConfig `json:"providers" yaml:"providers"`
 }
 
 type ProtectConfig struct {
 	Include []string `json:"include" yaml:"include"`
 	Exclude []string `json:"exclude" yaml:"exclude"`
+}
+
+type GeneratedConfig struct {
+	Patterns []string `json:"patterns" yaml:"patterns"`
+	Message  string   `json:"message" yaml:"message"`
 }
 
 type ProviderConfig struct {
@@ -52,24 +62,37 @@ func Default() Config {
 		MaxDiffChars:   120_000,
 		MaxFileBytes:   2 * 1024 * 1024,
 		DisableGPGSign: true,
+		Generated: GeneratedConfig{
+			Patterns: []string{
+				"*.pb.go",         // protobuf
+				"*.pb.gw.go",      // grpc-gateway
+				"*.gen.go",        // general generated
+				"*.generated.go",  // general generated
+				"*_gen.go",        // general generated
+				"mock_*.go",       // go mock
+				"*.db.go",         // sqlc
+				"*.graphql.go",    // graphql
+			},
+			Message: "chore: update generated files",
+		},
 		Providers: map[string]ProviderConfig{
 			"openai": {
 				Type:      "openai",
-				BaseURL:   "https://api.openai.com/v1",
+				BaseURL:   DefaultOpenAIBaseURL,
 				APIKeyEnv: "OPENAI_API_KEY",
 				ModelEnv:  "OPENAI_MODEL",
 				Model:     "gpt-5.4-mini",
 			},
 			"deepseek": {
 				Type:      "openai-compatible",
-				BaseURL:   "https://api.deepseek.com",
+				BaseURL:   DefaultDeepSeekBaseURL,
 				APIKeyEnv: "DEEPSEEK_API_KEY",
 				ModelEnv:  "DEEPSEEK_MODEL",
 				Model:     "deepseek-v4-flash",
 			},
 			"anthropic": {
 				Type:      "anthropic",
-				BaseURL:   "https://api.anthropic.com/v1",
+				BaseURL:   DefaultAnthropicBaseURL,
 				APIKeyEnv: "ANTHROPIC_API_KEY",
 				ModelEnv:  "ANTHROPIC_MODEL",
 				Model:     "claude-haiku-4-5-20251001",
@@ -185,6 +208,12 @@ func Merge(dst *Config, src Config) {
 	}
 	if src.Protect.Exclude != nil {
 		dst.Protect.Exclude = append([]string{}, src.Protect.Exclude...)
+	}
+	if src.Generated.Patterns != nil {
+		dst.Generated.Patterns = append([]string{}, src.Generated.Patterns...)
+	}
+	if src.Generated.Message != "" {
+		dst.Generated.Message = src.Generated.Message
 	}
 	if src.Providers != nil {
 		if dst.Providers == nil {

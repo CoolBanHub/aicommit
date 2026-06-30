@@ -241,6 +241,11 @@ func matchPattern(pattern, rel string) bool {
 	if !strings.Contains(pattern, "/") && path.Base(rel) == pattern {
 		return true
 	}
+	if !strings.Contains(pattern, "/") {
+		if ok, _ := path.Match(pattern, path.Base(rel)); ok {
+			return true
+		}
+	}
 	if ok, _ := path.Match(pattern, rel); ok {
 		return true
 	}
@@ -276,4 +281,18 @@ func matchDoubleStar(pattern, rel string) bool {
 		return strings.HasSuffix(rel, last)
 	}
 	return true
+}
+
+// MatchGeneratedFiles returns the list of files that match any of the generated patterns.
+func MatchGeneratedFiles(files []string, patterns []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	var matched []string
+	for _, file := range files {
+		if matchAny(patterns, normalizePath(file)) {
+			matched = append(matched, file)
+		}
+	}
+	return matched
 }

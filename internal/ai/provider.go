@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -14,11 +15,12 @@ import (
 )
 
 type CommitRequest struct {
-	RepoRoot string
-	Files    []string
-	Stat     string
-	Diff     string
-	Style    string
+	RepoRoot       string
+	Files          []string
+	Stat           string
+	Diff           string
+	Style          string
+	GeneratedFiles []string
 }
 
 type Provider interface {
@@ -58,6 +60,11 @@ func NewProvider(cfg FactoryConfig) (Provider, ResolvedProvider, error) {
 	resolved := ResolvedProvider{Name: name, Model: providerCfg.Model}
 	switch providerCfg.Type {
 	case "openai", "openai-compatible":
+		baseURL, err := resolveBaseURL(name, providerCfg.BaseURL)
+		if err != nil {
+			return nil, resolved, err
+		}
+		providerCfg.BaseURL = baseURL
 		apiKey := resolveAPIKey(providerCfg)
 		if apiKey == "" {
 			return nil, resolved, fmt.Errorf("%s API key is missing; set %s", name, providerCfg.APIKeyEnv)
@@ -69,6 +76,11 @@ func NewProvider(cfg FactoryConfig) (Provider, ResolvedProvider, error) {
 			Model:   providerCfg.Model,
 		}, resolved, nil
 	case "anthropic":
+		baseURL, err := resolveBaseURL(name, providerCfg.BaseURL)
+		if err != nil {
+			return nil, resolved, err
+		}
+		providerCfg.BaseURL = baseURL
 		apiKey := resolveAPIKey(providerCfg)
 		if apiKey == "" {
 			return nil, resolved, fmt.Errorf("Anthropic API key is missing; set %s", providerCfg.APIKeyEnv)
@@ -93,22 +105,61 @@ func NewProvider(cfg FactoryConfig) (Provider, ResolvedProvider, error) {
 }
 
 func resolveAutoProvider(providers map[string]config.ProviderConfig) string {
-	if cfg, ok := providers["openai"]; ok && resolveAPIKey(cfg) != "" {
-		return "openai"
-	}
-	if cfg, ok := providers["deepseek"]; ok && resolveAPIKey(cfg) != "" {
-		return "deepseek"
-	}
-	if cfg, ok := providers["anthropic"]; ok && resolveAPIKey(cfg) != "" {
-		return "anthropic"
+	if _, err := exec.LookPath("claude"); err == nil {
+		return "claude-code"
 	}
 	if _, err := exec.LookPath("codex"); err == nil {
 		return "codex"
 	}
-	if _, err := exec.LookPath("claude"); err == nil {
-		return "claude-code"
+	if cfg, ok := providers["openai"]; ok && providerConfiguredForHTTP("openai", cfg) {
+		return "openai"
+	}
+	if cfg, ok := providers["anthropic"]; ok && providerConfiguredForHTTP("anthropic", cfg) {
+		return "anthropic"
+	}
+	if cfg, ok := providers["deepseek"]; ok && providerConfiguredForHTTP("deepseek", cfg) {
+		return "deepseek"
 	}
 	return "openai"
+}
+
+func providerConfiguredForHTTP(name string, cfg config.ProviderConfig) bool {
+	if resolveAPIKey(cfg) == "" {
+		return false
+	}
+	_, err := resolveBaseURL(name, cfg.BaseURL)
+	return err == nil
+}
+
+func resolveBaseURL(name, baseURL string) (string, error) {
+	baseURL = baseURLWithDefault(name, baseURL)
+	if baseURL == "" {
+		return "", fmt.Errorf("%s base URL is missing", name)
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("%s base URL is invalid: %q", name, baseURL)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("%s base URL must use http or https: %q", name, baseURL)
+	}
+	return strings.TrimRight(baseURL, "/"), nil
+}
+
+func baseURLWithDefault(name, baseURL string) string {
+	if strings.TrimSpace(baseURL) != "" {
+		return strings.TrimSpace(baseURL)
+	}
+	switch name {
+	case "openai":
+		return config.DefaultOpenAIBaseURL
+	case "deepseek":
+		return config.DefaultDeepSeekBaseURL
+	case "anthropic":
+		return config.DefaultAnthropicBaseURL
+	default:
+		return ""
+	}
 }
 
 func resolveAPIKey(cfg config.ProviderConfig) string {
@@ -126,6 +177,12 @@ func BuildPrompt(req CommitRequest) string {
 	if style == "" {
 		style = "Use a concise imperative subject, no trailing period. Prefer Conventional Commits when the change clearly maps to a type."
 	}
+
+	var generatedNote string
+	if len(req.GeneratedFiles) > 0 {
+		generatedNote = fmt.Sprintf("\nGenerated files (auto-generated, focus changes on other files):\n%s\n", strings.Join(req.GeneratedFiles, "\n"))
+	}
+
 	return fmt.Sprintf(`You write git commit messages.
 
 Return JSON only with this exact shape:
@@ -138,8 +195,7 @@ Rules:
 - Do not add a trailing period.
 - Do not mention AI, generated code, staging, or this prompt.
 - %s
-
-Changed files:
+%sChanged files:
 %s
 
 Diff stat:
@@ -147,7 +203,7 @@ Diff stat:
 
 Cached diff:
 %s
-`, style, strings.Join(req.Files, "\n"), strings.TrimSpace(req.Stat), strings.TrimSpace(req.Diff))
+`, style, generatedNote, strings.Join(req.Files, "\n"), strings.TrimSpace(req.Stat), strings.TrimSpace(req.Diff))
 }
 
 func ExtractCommitMessage(text string) (string, error) {
