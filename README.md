@@ -22,6 +22,58 @@ AI 工具（如 Claude Code、Cursor、Copilot 等）修改代码时，经常会
 | **二进制文件检测** | ✅ 通过文件头字节检测二进制文件并排除 | ❌ 无此功能 |
 | **可覆盖规则** | ✅ 支持通过 `--include` / `--exclude` 灵活覆盖 | ❌ 规则较固定 |
 
+## 安装
+
+### macOS / Linux（一键安装）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.sh | sh
+```
+
+脚本会自动识别操作系统和架构，下载对应的二进制文件（如 `aicommit-darwin-arm64`），
+重命名为 `aicommit` 并安装为全局命令。默认安装到 `/usr/local/bin`；
+无写权限时安装到 `~/.local/bin`。
+
+也可以手动指定版本或安装目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.sh | sh -s -- --version v0.0.1 --dir ~/.local/bin
+```
+
+> 仓库为**私有**时，匿名下载会失败（404）。请先设置一个具备 `repo` 读权限的 token，
+> 并在**拉取脚本**和**下载二进制**时都带上它（脚本会自动读取环境变量中的 `GITHUB_TOKEN`）：
+> ```bash
+> export GITHUB_TOKEN=ghp_xxx
+> curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+>   https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.sh | sh
+> ```
+
+### Windows（PowerShell）
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.ps1 | iex
+```
+
+脚本会将 `aicommit.exe` 安装到 `%USERPROFILE%\.aicommit\bin` 并加入用户 PATH。
+打开新终端后即可使用 `aicommit`。
+
+> 私有仓库：先设置 `$env:GITHUB_TOKEN = 'ghp_xxx'`，再用带认证头的方式拉取脚本：
+> ```powershell
+> $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+> (iwr -useb -Headers $h https://raw.githubusercontent.com/CoolBanHub/aicommit/main/install.ps1).Content | iex
+> ```
+
+### 手动下载
+
+前往 [Releases 页面](https://github.com/CoolBanHub/aicommit/releases/latest)，根据平台下载对应文件
+（如 `aicommit-darwin-arm64`），重命名为 `aicommit`（Windows 为 `aicommit.exe`），赋予执行权限并放入 `PATH`：
+
+```bash
+chmod +x aicommit-darwin-arm64
+sudo mv aicommit-darwin-arm64 /usr/local/bin/aicommit
+aicommit version
+```
+
 ## 构建
 
 ```bash
