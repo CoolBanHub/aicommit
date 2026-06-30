@@ -58,6 +58,19 @@ func (p *AnthropicProvider) GenerateCommitMessage(ctx context.Context, req Commi
 		return "", fmt.Errorf("anthropic API returned %s: %s", resp.Status, strings.TrimSpace(string(respData)))
 	}
 
+	// Check for error-style responses (e.g., Zhipu/GLM API)
+	var errorResp struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respData, &errorResp); err == nil && errorResp.Type == "error" {
+		return "", fmt.Errorf("API error: %s (code: %s)", errorResp.Error.Message, errorResp.Error.Code)
+	}
+
 	var parsed struct {
 		Content []struct {
 			Type string `json:"type"`

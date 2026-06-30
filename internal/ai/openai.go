@@ -62,6 +62,19 @@ func (p *ChatCompletionsProvider) GenerateCommitMessage(ctx context.Context, req
 		return "", fmt.Errorf("%s API returned %s: %s", p.Name, resp.Status, strings.TrimSpace(string(respData)))
 	}
 
+	// Check for error-style responses from compatible APIs (e.g., Zhipu/GLM, Baidu Qianfan)
+	var errorResp struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respData, &errorResp); err == nil && errorResp.Type == "error" {
+		return "", fmt.Errorf("API error: %s (code: %s)", errorResp.Error.Message, errorResp.Error.Code)
+	}
+
 	var parsed struct {
 		Choices []struct {
 			Message struct {
