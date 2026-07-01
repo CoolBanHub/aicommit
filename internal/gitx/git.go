@@ -329,6 +329,21 @@ func Push(ctx context.Context, repo string) (bool, string, string, error) {
 	return true, remote + "/" + branch, "", nil
 }
 
+func PushTag(ctx context.Context, repo, tag string) (bool, string, string, error) {
+	remotes, err := remoteList(ctx, repo)
+	if err != nil {
+		return false, "", "", err
+	}
+	remote := chooseRemote(remotes)
+	if remote == "" {
+		return false, "", "no remote", nil
+	}
+	if _, err := run(ctx, repo, "push", remote, "refs/tags/"+tag); err != nil {
+		return false, "", "", err
+	}
+	return true, remote + "/" + tag, "", nil
+}
+
 func currentBranch(ctx context.Context, repo string) (string, error) {
 	out, err := run(ctx, repo, "branch", "--show-current")
 	if err != nil {

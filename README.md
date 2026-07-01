@@ -83,7 +83,9 @@ go build -o aicommit ./cmd/aicommit
 ./aicommit commit --provider cdp
 ./aicommit push
 ./aicommit tag
+./aicommit tag --push
 ./aicommit tag v1.2.3
+./aicommit push-tag v1.2.3
 ```
 
 默认情况下，`commit` 命令会执行以下操作：
@@ -102,12 +104,18 @@ go build -o aicommit ./cmd/aicommit
 
 ```bash
 ./aicommit tag
+./aicommit tag --push
 ./aicommit tag v1.2.3
+./aicommit push-tag v1.2.3
+./aicommit push tag v1.2.3
 ```
 
 `aicommit tag` 会基于当前仓库已有的最新数字版本标签自动递增最后一段数字。
 例如已有 `v0.0.1` 时会创建 `v0.0.2`；已有 `v1.2.3.4` 时会创建 `v1.2.3.5`。
-也可以直接指定要创建的版本标签。
+也可以直接指定要创建的版本标签。使用 `--push` 会在创建后推送刚创建的标签。
+
+`aicommit push-tag` 会推送指定标签；不指定标签时，会推送当前仓库已有的最新数字版本标签。
+`aicommit push tag` 是同等功能的别名。
 
 ## 服务模式
 

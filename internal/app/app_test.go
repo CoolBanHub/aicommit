@@ -316,6 +316,89 @@ func TestRunTagDefaultsWhenNoNumericTagsExist(t *testing.T) {
 	}
 }
 
+func TestRunTagPushesCreatedTag(t *testing.T) {
+	repo := initGitRepo(t)
+	remote := initBareGitRepo(t)
+	runGit(t, repo, "remote", "add", "origin", remote)
+	writeFile(t, repo, "app.txt", "code\n")
+	runGit(t, repo, "add", "app.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "tag", "v0.0.1")
+
+	result, err := RunTag(context.Background(), TagOptions{Repo: repo, Push: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Tag != "v0.0.2" {
+		t.Fatalf("expected v0.0.2, got %q", result.Tag)
+	}
+	if !result.Pushed {
+		t.Fatalf("expected tag to be pushed, got %#v", result)
+	}
+	if result.PushTarget != "origin/v0.0.2" {
+		t.Fatalf("expected origin/v0.0.2 target, got %q", result.PushTarget)
+	}
+	if got := strings.TrimSpace(gitOutput(t, remote, "tag", "--list", "v0.0.2")); got != "v0.0.2" {
+		t.Fatalf("expected remote tag to exist, got %q", got)
+	}
+}
+
+func TestRunPushTagPushesLatestNumericTag(t *testing.T) {
+	repo := initGitRepo(t)
+	remote := initBareGitRepo(t)
+	runGit(t, repo, "remote", "add", "origin", remote)
+	writeFile(t, repo, "app.txt", "code\n")
+	runGit(t, repo, "add", "app.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "tag", "release")
+	runGit(t, repo, "tag", "v1.2.3.4")
+
+	result, err := RunPushTag(context.Background(), PushTagOptions{Repo: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Tag != "v1.2.3.4" {
+		t.Fatalf("expected v1.2.3.4, got %q", result.Tag)
+	}
+	if !result.Pushed {
+		t.Fatalf("expected tag to be pushed, got %#v", result)
+	}
+	if result.Target != "origin/v1.2.3.4" {
+		t.Fatalf("expected origin/v1.2.3.4 target, got %q", result.Target)
+	}
+	if got := strings.TrimSpace(gitOutput(t, remote, "tag", "--list", "v1.2.3.4")); got != "v1.2.3.4" {
+		t.Fatalf("expected remote tag to exist, got %q", got)
+	}
+	if got := strings.TrimSpace(gitOutput(t, remote, "tag", "--list", "release")); got != "" {
+		t.Fatalf("did not expect non-numeric tag to be pushed, got %q", got)
+	}
+}
+
+func TestRunPushTagPushesSpecifiedTag(t *testing.T) {
+	repo := initGitRepo(t)
+	remote := initBareGitRepo(t)
+	runGit(t, repo, "remote", "add", "origin", remote)
+	writeFile(t, repo, "app.txt", "code\n")
+	runGit(t, repo, "add", "app.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "tag", "v1.0.0")
+	runGit(t, repo, "tag", "v2.0.0")
+
+	result, err := RunPushTag(context.Background(), PushTagOptions{Repo: repo, Tag: "v1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Tag != "v1.0.0" {
+		t.Fatalf("expected v1.0.0, got %q", result.Tag)
+	}
+	if got := strings.TrimSpace(gitOutput(t, remote, "tag", "--list", "v1.0.0")); got != "v1.0.0" {
+		t.Fatalf("expected specified remote tag to exist, got %q", got)
+	}
+	if got := strings.TrimSpace(gitOutput(t, remote, "tag", "--list", "v2.0.0")); got != "" {
+		t.Fatalf("did not expect other tag to be pushed, got %q", got)
+	}
+}
+
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -323,6 +406,17 @@ func initGitRepo(t *testing.T) string {
 	runGit(t, repo, "config", "user.email", "tester@example.com")
 	runGit(t, repo, "config", "user.name", "Tester")
 	runGit(t, repo, "config", "commit.gpgsign", "false")
+	return repo
+}
+
+func initBareGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	cmd := exec.Command("git", "-C", repo, "init", "--bare", "-q")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git init --bare failed: %v\n%s", err, string(out))
+	}
 	return repo
 }
 

@@ -53,7 +53,12 @@ func run(ctx context.Context, args []string) error {
 	case "commit":
 		return runCommit(ctx, args[1:])
 	case "push":
+		if len(args) > 1 && args[1] == "tag" {
+			return runPushTag(ctx, args[2:])
+		}
 		return runPush(ctx, args[1:])
+	case "push-tag":
+		return runPushTag(ctx, args[1:])
 	case "tag":
 		return runTag(ctx, args[1:])
 	case "serve":
@@ -193,6 +198,7 @@ func runTag(ctx context.Context, args []string) error {
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&opts.Repo, "repo", ".", "target git repository")
 	fs.StringVar(&opts.Tag, "tag", "", "tag version to create; defaults to incrementing the latest numeric tag")
+	fs.BoolVar(&opts.Push, "push", false, "push the created tag")
 	fs.BoolVar(&outputJSON, "json", false, "print JSON result")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -224,6 +230,56 @@ func runTag(ctx context.Context, args []string) error {
 		fmt.Printf("Tagged %s (previous %s)\n", result.Tag, result.Previous)
 	} else {
 		fmt.Printf("Tagged %s\n", result.Tag)
+	}
+	if result.Pushed {
+		fmt.Printf("Pushed tag to %s\n", result.PushTarget)
+	} else if result.PushSkippedReason != "" {
+		fmt.Printf("Tag push skipped: %s\n", result.PushSkippedReason)
+	}
+	return nil
+}
+
+func runPushTag(ctx context.Context, args []string) error {
+	var opts app.PushTagOptions
+	var outputJSON bool
+
+	fs := flag.NewFlagSet("push-tag", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&opts.Repo, "repo", ".", "target git repository")
+	fs.StringVar(&opts.Tag, "tag", "", "tag version to push; defaults to the latest numeric tag")
+	fs.BoolVar(&outputJSON, "json", false, "print JSON result")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	remaining := fs.Args()
+	if len(remaining) > 1 {
+		return fmt.Errorf("push-tag accepts at most one version argument")
+	}
+	if len(remaining) == 1 {
+		if opts.Tag != "" {
+			return errors.New("tag version specified twice")
+		}
+		opts.Tag = remaining[0]
+	}
+
+	result, err := app.RunPushTag(ctx, opts)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+	if result.Pushed {
+		fmt.Printf("Pushed tag %s to %s\n", result.Tag, result.Target)
+	} else if result.SkippedReason != "" {
+		fmt.Printf("Tag push skipped: %s\n", result.SkippedReason)
+	} else {
+		fmt.Println("Nothing pushed.")
 	}
 	return nil
 }
@@ -261,6 +317,7 @@ Usage:
   aicommit commit [flags]
   aicommit push [flags]
   aicommit tag [flags] [version]
+  aicommit push-tag [flags] [version]
   aicommit serve [flags]
   aicommit version
 
@@ -270,7 +327,9 @@ Common examples:
   aicommit commit --provider codex
   aicommit push
   aicommit tag
+  aicommit tag --push
   aicommit tag v1.2.3
+  aicommit push-tag v1.2.3
   aicommit serve --addr 127.0.0.1:8686
 `)
 }

@@ -63,12 +63,29 @@ type PushResult struct {
 type TagOptions struct {
 	Repo string `json:"repo"`
 	Tag  string `json:"tag"`
+	Push bool   `json:"push"`
 }
 
 type TagResult struct {
-	RepoRoot string `json:"repoRoot"`
-	Tag      string `json:"tag"`
-	Previous string `json:"previous,omitempty"`
+	RepoRoot          string `json:"repoRoot"`
+	Tag               string `json:"tag"`
+	Previous          string `json:"previous,omitempty"`
+	Pushed            bool   `json:"pushed"`
+	PushTarget        string `json:"pushTarget,omitempty"`
+	PushSkippedReason string `json:"pushSkippedReason,omitempty"`
+}
+
+type PushTagOptions struct {
+	Repo string `json:"repo"`
+	Tag  string `json:"tag"`
+}
+
+type PushTagResult struct {
+	RepoRoot      string `json:"repoRoot"`
+	Tag           string `json:"tag"`
+	Pushed        bool   `json:"pushed"`
+	Target        string `json:"target,omitempty"`
+	SkippedReason string `json:"skippedReason,omitempty"`
 }
 
 func BoolPtr(v bool) *bool {
@@ -351,7 +368,50 @@ func RunTag(ctx context.Context, opts TagOptions) (TagResult, error) {
 	if err := gitx.CreateTag(ctx, repoRoot, tag); err != nil {
 		return TagResult{}, err
 	}
-	return TagResult{RepoRoot: repoRoot, Tag: tag, Previous: previous}, nil
+	result := TagResult{RepoRoot: repoRoot, Tag: tag, Previous: previous}
+	if opts.Push {
+		pushed, target, reason, err := gitx.PushTag(ctx, repoRoot, tag)
+		if err != nil {
+			return TagResult{}, err
+		}
+		result.Pushed = pushed
+		result.PushTarget = target
+		result.PushSkippedReason = reason
+	}
+	return result, nil
+}
+
+func RunPushTag(ctx context.Context, opts PushTagOptions) (PushTagResult, error) {
+	repo := opts.Repo
+	if repo == "" {
+		repo = "."
+	}
+	repoRoot, err := gitx.Root(ctx, repo)
+	if err != nil {
+		return PushTagResult{}, err
+	}
+	tag := strings.TrimSpace(opts.Tag)
+	if tag == "" {
+		tags, err := gitx.TagsSortedByVersion(ctx, repoRoot)
+		if err != nil {
+			return PushTagResult{}, err
+		}
+		tag = latestNumericTag(tags)
+	}
+	if tag == "" {
+		return PushTagResult{}, errors.New("tag is empty")
+	}
+	pushed, target, reason, err := gitx.PushTag(ctx, repoRoot, tag)
+	if err != nil {
+		return PushTagResult{}, err
+	}
+	return PushTagResult{
+		RepoRoot:      repoRoot,
+		Tag:           tag,
+		Pushed:        pushed,
+		Target:        target,
+		SkippedReason: reason,
+	}, nil
 }
 
 func applyCommitOverrides(cfg *config.Config, opts CommitOptions) {
@@ -457,6 +517,15 @@ func nextTag(tags []string) (string, string, error) {
 		}
 	}
 	return "v0.0.1", "", nil
+}
+
+func latestNumericTag(tags []string) string {
+	for _, tag := range tags {
+		if _, ok := incrementTrailingNumber(tag); ok {
+			return tag
+		}
+	}
+	return ""
 }
 
 func incrementTrailingNumber(tag string) (string, bool) {
