@@ -234,6 +234,42 @@ generated:
 	}
 }
 
+func TestRunCommitDoesNotAutoIgnoreLargeTextDocuments(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	writeFile(t, repo, ".gitignore", "# baseline\n")
+	runGit(t, repo, "add", ".gitignore")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	writeFile(t, repo, "references/api-automation.md", "# API automation\n\n"+strings.Repeat("field description ", 2000)+"\n")
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:         repo,
+		ConfigPath:   configPath,
+		Message:      "docs: add api automation reference",
+		MaxFileBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.NoChanges {
+		t.Fatalf("expected large text document to be skipped by explicit maxFileBytes limit")
+	}
+	if !containsDecision(result.Skipped, "references/api-automation.md", "file is larger than maxFileBytes") {
+		t.Fatalf("expected Markdown document to be skipped by size only, got %#v", result.Skipped)
+	}
+
+	gitignoreData, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitignore := string(gitignoreData)
+	if strings.Contains(gitignore, "references/api-automation.md") {
+		t.Fatalf("Markdown document should not be auto-ignored, got:\n%s", gitignore)
+	}
+}
+
 func TestRunTagIncrementsLatestNumericTag(t *testing.T) {
 	repo := initGitRepo(t)
 	writeFile(t, repo, "app.txt", "code\n")

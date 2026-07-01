@@ -165,8 +165,8 @@ export AICOMMIT_CDP_COMMAND='your-cdp-client generate-commit-message'
 项目的 `.gitignore` 始终受到尊重。如果你手动添加了 `*.png`、`*.pdf`、`*.so` 或 `*.dll` 等模式，
 匹配的文件将被视为受保护文件，在提交前从索引中移除。
 
-当 `aicommit` 检测到未被 `.gitignore` 覆盖的受保护文件时，它会将该具体路径追加到 `.gitignore`，
-并将更新后的 `.gitignore` 包含在提交中。
+当 `aicommit` 检测到未被 `.gitignore` 覆盖、且适合长期忽略的受保护文件时，它会将该具体路径追加到 `.gitignore`，
+并将更新后的 `.gitignore` 包含在提交中。仅因超过 `maxFileBytes` 被跳过的文本文件不会自动写入 `.gitignore`。
 
 默认保护包括：
 
@@ -175,7 +175,7 @@ export AICOMMIT_CDP_COMMAND='your-cdp-client generate-commit-message'
 - 常见的压缩包、凭证、生成文件、音频、视频和字体扩展名
 - `.so`、`.dll`、`.jpg`、`.png` 和 `.pdf` 不会仅按扩展名过滤；
   请手动审查，将它们添加到 `.gitignore`，或添加 `protect.exclude` 规则
-- 超过 `maxFileBytes` 大小的文件
+- 超过 `maxFileBytes` 大小的文件（只跳过本次提交，不自动写入 `.gitignore`）
 - 起始字节看起来是二进制内容的文件
 
 可通过以下方式覆盖：

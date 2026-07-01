@@ -3,6 +3,7 @@ package filter
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +59,22 @@ func TestRulesDetectsBinaryContent(t *testing.T) {
 	decision := rules.Decide(dir, "fixture.dat")
 	if decision.Allowed {
 		t.Fatalf("expected binary file to be protected")
+	}
+}
+
+func TestRulesAllowsUTF8MarkdownEvenWithLongLines(t *testing.T) {
+	dir := t.TempDir()
+	header := "# API automation\n\n"
+	prefix := strings.Repeat("a", binarySampleBytes-len(header)-1)
+	contents := []byte(header + prefix + "中\n")
+	if err := os.WriteFile(filepath.Join(dir, "api-automation.md"), contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rules := NewRules(Options{MaxFileBytes: int64(len(contents) + 1)})
+	decision := rules.Decide(dir, "api-automation.md")
+	if !decision.Allowed {
+		t.Fatalf("expected UTF-8 Markdown document to be allowed, got %q", decision.Reason)
 	}
 }
 

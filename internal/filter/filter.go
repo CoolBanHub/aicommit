@@ -27,6 +27,8 @@ type Decision struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
+const binarySampleBytes = 8192
+
 func NewRules(opts Options) Rules {
 	if opts.MaxFileBytes <= 0 {
 		opts.MaxFileBytes = 2 * 1024 * 1024
@@ -132,11 +134,11 @@ func (r Rules) Decide(repoRoot, relPath string) Decision {
 	if info.IsDir() {
 		return Decision{Path: clean, Allowed: true}
 	}
+	if looksBinary(abs, info.Size()) {
+		return Decision{Path: clean, Allowed: false, Reason: "binary file"}
+	}
 	if info.Size() > r.maxFileBytes {
 		return Decision{Path: clean, Allowed: false, Reason: "file is larger than maxFileBytes"}
-	}
-	if looksBinary(abs) {
-		return Decision{Path: clean, Allowed: false, Reason: "binary file"}
 	}
 	return Decision{Path: clean, Allowed: true}
 }
@@ -181,14 +183,14 @@ var blockedExtensions = map[string]struct{}{
 	"xlsx": {}, "xz": {}, "zip": {},
 }
 
-func looksBinary(abs string) bool {
+func looksBinary(abs string, size int64) bool {
 	f, err := os.Open(abs)
 	if err != nil {
 		return false
 	}
 	defer f.Close()
 
-	buf := make([]byte, 8192)
+	buf := make([]byte, binarySampleBytes)
 	n, err := f.Read(buf)
 	if n == 0 || err != nil {
 		return false
@@ -197,7 +199,24 @@ func looksBinary(abs string) bool {
 	if bytes.IndexByte(sample, 0) >= 0 {
 		return true
 	}
-	return !utf8.Valid(sample)
+	if utf8.Valid(sample) {
+		return false
+	}
+	if int64(n) < size && hasOnlyTrailingIncompleteUTF8(sample) {
+		return false
+	}
+	return true
+}
+
+func hasOnlyTrailingIncompleteUTF8(sample []byte) bool {
+	for trim := 1; trim < utf8.UTFMax && trim < len(sample); trim++ {
+		prefix := sample[:len(sample)-trim]
+		suffix := sample[len(sample)-trim:]
+		if utf8.Valid(prefix) && !utf8.FullRune(suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePatterns(patterns []string) []string {

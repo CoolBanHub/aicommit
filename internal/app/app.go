@@ -180,7 +180,7 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 		decision := decidePath(repoRoot, path, rules, ignoredChanged)
 		if !decision.Allowed {
 			result.Skipped = appendDecision(result.Skipped, decision)
-			if decision.Reason != "ignored by .gitignore" {
+			if shouldAutoIgnoreDecision(decision) {
 				detectedIgnorePatterns = append(detectedIgnorePatterns, decision.Path)
 			}
 			if _, wasStaged := stagedSet[path]; !wasStaged {
@@ -507,6 +507,18 @@ func decidePath(repoRoot, path string, rules filter.Rules, ignored map[string]st
 		return filter.Decision{Path: path, Allowed: false, Reason: "ignored by .gitignore"}
 	}
 	return rules.Decide(repoRoot, path)
+}
+
+func shouldAutoIgnoreDecision(decision filter.Decision) bool {
+	if decision.Allowed {
+		return false
+	}
+	switch decision.Reason {
+	case "ignored by .gitignore", "file is larger than maxFileBytes":
+		return false
+	default:
+		return true
+	}
 }
 
 func nextTag(tags []string) (string, string, error) {
