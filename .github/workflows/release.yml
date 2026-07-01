@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+
+          build() {
+            goos="$1"
+            goarch="$2"
+            output="dist/aicommit-${goos}-${goarch}"
+            if [ "$goos" = "windows" ]; then
+              output="${output}.exe"
+            fi
+
+            echo "Building ${output}"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build \
+                -trimpath \
+                -ldflags="-s -w -X main.version=${VERSION}" \
+                -o "$output" \
+                ./cmd/aicommit
+          }
+
+          build darwin amd64
+          build darwin arm64
+          build linux amd64
+          build linux arm64
+          build linux 386
+          build windows amd64
+          build windows 386
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/* --clobber
+          else
+            gh release create "$VERSION" dist/* \
+              --title "$VERSION" \
+              --generate-notes
+          fi
