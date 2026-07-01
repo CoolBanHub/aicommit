@@ -16,7 +16,8 @@ import (
 	"github.com/CoolBanHub/aicommit/internal/server"
 )
 
-var version = "v0.0.1"
+// Release builds override this with: -ldflags="-X main.version=<tag>".
+var version = "dev"
 
 type multiFlag []string
 
