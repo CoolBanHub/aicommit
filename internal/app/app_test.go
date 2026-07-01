@@ -234,6 +234,88 @@ generated:
 	}
 }
 
+func TestRunTagIncrementsLatestNumericTag(t *testing.T) {
+	repo := initGitRepo(t)
+	writeFile(t, repo, "app.txt", "code\n")
+	runGit(t, repo, "add", "app.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "tag", "v0.0.1")
+
+	result, err := RunTag(context.Background(), TagOptions{Repo: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Tag != "v0.0.2" {
+		t.Fatalf("expected v0.0.2, got %q", result.Tag)
+	}
+	if result.Previous != "v0.0.1" {
+		t.Fatalf("expected previous v0.0.1, got %q", result.Previous)
+	}
+	if got := strings.TrimSpace(gitOutput(t, repo, "tag", "--list", "v0.0.2")); got != "v0.0.2" {
+		t.Fatalf("expected tag to be created, got %q", got)
+	}
+}
+
+func TestRunTagIncrementsFourPartVersion(t *testing.T) {
+	repo := initGitRepo(t)
+	writeFile(t, repo, "app.txt", "code\n")
+	runGit(t, repo, "add", "app.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "tag", "v1.2.3.4")
+
+	result, err := RunTag(context.Background(), TagOptions{Repo: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Tag != "v1.2.3.5" {
+		t.Fatalf("expected v1.2.3.5, got %q", result.Tag)
+	}
+	if result.Previous != "v1.2.3.4" {
+		t.Fatalf("expected previous v1.2.3.4, got %q", result.Previous)
+	}
+}
+
+func TestRunTagCreatesSpecifiedTag(t *testing.T) {
+	repo := initGitRepo(t)
+	writeFile(t, repo, "app.txt", "code\n")
+	runGit(t, repo, "add", "app.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "tag", "v0.0.1")
+
+	result, err := RunTag(context.Background(), TagOptions{Repo: repo, Tag: "v2.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Tag != "v2.0.0" {
+		t.Fatalf("expected v2.0.0, got %q", result.Tag)
+	}
+	if result.Previous != "" {
+		t.Fatalf("did not expect previous for explicit tag, got %q", result.Previous)
+	}
+	if got := strings.TrimSpace(gitOutput(t, repo, "tag", "--list", "v2.0.0")); got != "v2.0.0" {
+		t.Fatalf("expected explicit tag to be created, got %q", got)
+	}
+}
+
+func TestRunTagDefaultsWhenNoNumericTagsExist(t *testing.T) {
+	repo := initGitRepo(t)
+	writeFile(t, repo, "app.txt", "code\n")
+	runGit(t, repo, "add", "app.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "tag", "release")
+
+	result, err := RunTag(context.Background(), TagOptions{Repo: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Tag != "v0.0.1" {
+		t.Fatalf("expected v0.0.1, got %q", result.Tag)
+	}
+	if result.Previous != "" {
+		t.Fatalf("did not expect previous, got %q", result.Previous)
+	}
+}
+
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

@@ -271,6 +271,27 @@ func CommitHash(ctx context.Context, repo string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+func TagsSortedByVersion(ctx context.Context, repo string) ([]string, error) {
+	out, err := run(ctx, repo, "tag", "--list", "--sort=-version:refname")
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	var tags []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			tags = append(tags, line)
+		}
+	}
+	return tags, nil
+}
+
+func CreateTag(ctx context.Context, repo, tag string) error {
+	_, err := run(ctx, repo, "tag", tag)
+	return err
+}
+
 func HasRemote(ctx context.Context, repo string) (bool, error) {
 	out, err := run(ctx, repo, "remote")
 	if err != nil {

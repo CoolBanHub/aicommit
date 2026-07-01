@@ -44,6 +44,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
+		fmt.Printf("version: %s\n", version)
 		printRootUsage()
 		return nil
 	}
@@ -53,12 +54,15 @@ func run(ctx context.Context, args []string) error {
 		return runCommit(ctx, args[1:])
 	case "push":
 		return runPush(ctx, args[1:])
+	case "tag":
+		return runTag(ctx, args[1:])
 	case "serve":
 		return runServe(ctx, args[1:])
 	case "version":
 		fmt.Println(version)
 		return nil
 	case "-h", "--help", "help":
+		fmt.Printf("version: %s\n", version)
 		printRootUsage()
 		return nil
 	default:
@@ -181,6 +185,49 @@ func runPush(ctx context.Context, args []string) error {
 	return nil
 }
 
+func runTag(ctx context.Context, args []string) error {
+	var opts app.TagOptions
+	var outputJSON bool
+
+	fs := flag.NewFlagSet("tag", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&opts.Repo, "repo", ".", "target git repository")
+	fs.StringVar(&opts.Tag, "tag", "", "tag version to create; defaults to incrementing the latest numeric tag")
+	fs.BoolVar(&outputJSON, "json", false, "print JSON result")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	remaining := fs.Args()
+	if len(remaining) > 1 {
+		return fmt.Errorf("tag accepts at most one version argument")
+	}
+	if len(remaining) == 1 {
+		if opts.Tag != "" {
+			return errors.New("tag version specified twice")
+		}
+		opts.Tag = remaining[0]
+	}
+
+	result, err := app.RunTag(ctx, opts)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+	if result.Previous != "" {
+		fmt.Printf("Tagged %s (previous %s)\n", result.Tag, result.Previous)
+	} else {
+		fmt.Printf("Tagged %s\n", result.Tag)
+	}
+	return nil
+}
+
 func runServe(ctx context.Context, args []string) error {
 	var addr string
 	var configPath string
@@ -213,6 +260,7 @@ func printRootUsage() {
 Usage:
   aicommit commit [flags]
   aicommit push [flags]
+  aicommit tag [flags] [version]
   aicommit serve [flags]
   aicommit version
 
@@ -221,6 +269,8 @@ Common examples:
   aicommit commit --provider openai --model gpt-5.4-mini
   aicommit commit --provider codex
   aicommit push
+  aicommit tag
+  aicommit tag v1.2.3
   aicommit serve --addr 127.0.0.1:8686
 `)
 }

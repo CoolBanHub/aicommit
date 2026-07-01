@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/CoolBanHub/aicommit/internal/ai"
@@ -57,6 +58,17 @@ type PushResult struct {
 	Pushed        bool   `json:"pushed"`
 	Target        string `json:"target,omitempty"`
 	SkippedReason string `json:"skippedReason,omitempty"`
+}
+
+type TagOptions struct {
+	Repo string `json:"repo"`
+	Tag  string `json:"tag"`
+}
+
+type TagResult struct {
+	RepoRoot string `json:"repoRoot"`
+	Tag      string `json:"tag"`
+	Previous string `json:"previous,omitempty"`
 }
 
 func BoolPtr(v bool) *bool {
@@ -311,6 +323,37 @@ func RunPush(ctx context.Context, opts PushOptions) (PushResult, error) {
 	}, nil
 }
 
+func RunTag(ctx context.Context, opts TagOptions) (TagResult, error) {
+	repo := opts.Repo
+	if repo == "" {
+		repo = "."
+	}
+	repoRoot, err := gitx.Root(ctx, repo)
+	if err != nil {
+		return TagResult{}, err
+	}
+
+	tag := strings.TrimSpace(opts.Tag)
+	var previous string
+	if tag == "" {
+		tags, err := gitx.TagsSortedByVersion(ctx, repoRoot)
+		if err != nil {
+			return TagResult{}, err
+		}
+		tag, previous, err = nextTag(tags)
+		if err != nil {
+			return TagResult{}, err
+		}
+	}
+	if tag == "" {
+		return TagResult{}, errors.New("tag is empty")
+	}
+	if err := gitx.CreateTag(ctx, repoRoot, tag); err != nil {
+		return TagResult{}, err
+	}
+	return TagResult{RepoRoot: repoRoot, Tag: tag, Previous: previous}, nil
+}
+
 func applyCommitOverrides(cfg *config.Config, opts CommitOptions) {
 	if opts.Provider != "" {
 		cfg.Provider = opts.Provider
@@ -404,4 +447,33 @@ func decidePath(repoRoot, path string, rules filter.Rules, ignored map[string]st
 		return filter.Decision{Path: path, Allowed: false, Reason: "ignored by .gitignore"}
 	}
 	return rules.Decide(repoRoot, path)
+}
+
+func nextTag(tags []string) (string, string, error) {
+	for _, tag := range tags {
+		next, ok := incrementTrailingNumber(tag)
+		if ok {
+			return next, tag, nil
+		}
+	}
+	return "v0.0.1", "", nil
+}
+
+func incrementTrailingNumber(tag string) (string, bool) {
+	if tag == "" {
+		return "", false
+	}
+	end := len(tag)
+	start := end
+	for start > 0 && tag[start-1] >= '0' && tag[start-1] <= '9' {
+		start--
+	}
+	if start == end {
+		return "", false
+	}
+	number, err := strconv.Atoi(tag[start:end])
+	if err != nil {
+		return "", false
+	}
+	return tag[:start] + strconv.Itoa(number+1), true
 }
