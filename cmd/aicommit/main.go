@@ -16,7 +16,7 @@ import (
 	"github.com/CoolBanHub/aicommit/internal/server"
 )
 
-var version = "dev"
+var version = "v0.0.1"
 
 type multiFlag []string
 
