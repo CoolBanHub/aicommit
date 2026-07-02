@@ -17,6 +17,10 @@ func TestRulesProtectsCommonSensitiveAndBinaryPaths(t *testing.T) {
 		"dist/app.js",
 		"secret.pem",
 		"archive.zip",
+		".DS_Store",
+		"nested/Thumbs.db",
+		"nested/desktop.ini",
+		"._README.md",
 	}
 
 	for _, path := range tests {

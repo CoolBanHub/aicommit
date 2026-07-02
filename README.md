@@ -171,6 +171,7 @@ export AICOMMIT_CDP_COMMAND='your-cdp-client generate-commit-message'
 默认保护包括：
 
 - `.env`、`.env.*`、`.npmrc`、私钥和凭证类文件
+- `.DS_Store`、`._*`、`Thumbs.db`、`desktop.ini` 等系统元数据文件
 - `node_modules`、`dist`、`build`、`coverage`、`target`、`vendor`
 - 常见的压缩包、凭证、生成文件、音频、视频和字体扩展名
 - `.so`、`.dll`、`.jpg`、`.png` 和 `.pdf` 不会仅按扩展名过滤；

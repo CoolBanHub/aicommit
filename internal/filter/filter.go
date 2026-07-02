@@ -42,6 +42,16 @@ func NewRules(opts Options) Rules {
 
 func DefaultGitignorePatterns() []string {
 	return []string{
+		".DS_Store",
+		".AppleDouble",
+		".LSOverride",
+		"Icon?",
+		"._*",
+		".Spotlight-V100",
+		".Trashes",
+		"ehthumbs.db",
+		"Thumbs.db",
+		"desktop.ini",
 		".env",
 		".env.*",
 		".npmrc",
@@ -155,6 +165,13 @@ func defaultPathReason(rel string) string {
 		}
 	}
 
+	if _, ok := defaultSystemFiles[lowerBase]; ok {
+		return "OS metadata file"
+	}
+	if strings.HasPrefix(base, "._") {
+		return "OS metadata file"
+	}
+
 	if lowerBase == ".env" || strings.HasPrefix(lowerBase, ".env.") {
 		return "environment file"
 	}
@@ -171,6 +188,17 @@ func defaultPathReason(rel string) string {
 		return "binary or archive extension"
 	}
 	return ""
+}
+
+var defaultSystemFiles = map[string]struct{}{
+	".ds_store":       {},
+	".appledouble":    {},
+	".lsoverride":     {},
+	".spotlight-v100": {},
+	".trashes":        {},
+	"desktop.ini":     {},
+	"ehthumbs.db":     {},
+	"thumbs.db":       {},
 }
 
 var blockedExtensions = map[string]struct{}{
