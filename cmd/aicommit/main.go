@@ -148,6 +148,7 @@ func runCommit(ctx context.Context, args []string) error {
 	if len(result.Files) > 0 {
 		fmt.Printf("Files: %d\n", len(result.Files))
 	}
+	printWarnings(result)
 	printSkipped(result)
 	if result.Pushed {
 		fmt.Printf("Pushed to %s\n", result.PushTarget)
@@ -299,6 +300,12 @@ func runServe(ctx context.Context, args []string) error {
 		return err
 	}
 	return server.Run(ctx, server.Options{Addr: addr, ConfigPath: configPath})
+}
+
+func printWarnings(result app.CommitResult) {
+	for _, warning := range result.Warnings {
+		fmt.Printf("Warning: %s\n", warning)
+	}
 }
 
 func printSkipped(result app.CommitResult) {

@@ -261,27 +261,21 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 	}
 
 	if message == "" {
-		provider, resolved, err := ai.NewProvider(ai.FactoryConfig{
-			Provider:  providerName,
-			Model:     model,
-			Providers: cfg.Providers,
-		})
-		if err != nil {
-			return CommitResult{}, err
-		}
-		result.Provider = resolved.Name
-		result.Model = resolved.Model
-		message, err = provider.GenerateCommitMessage(ctx, ai.CommitRequest{
+		request := ai.CommitRequest{
 			RepoRoot:       repoRoot,
 			Files:          files,
 			Stat:           stat,
 			Diff:           diff,
 			Style:          cfg.Style,
 			GeneratedFiles: generatedFiles,
-		})
+		}
+		resolved, warnings, err := generateAICommitMessage(ctx, providerName, model, cfg.Providers, request, &message)
 		if err != nil {
 			return CommitResult{}, err
 		}
+		result.Provider = resolved.Name
+		result.Model = resolved.Model
+		result.Warnings = append(result.Warnings, warnings...)
 	} else if opts.Message != "" {
 		result.Provider = "manual"
 	}
@@ -310,6 +304,65 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 	result.PushTarget = pushResult.Target
 	result.PushSkippedReason = pushResult.SkippedReason
 	return result, nil
+}
+
+func generateAICommitMessage(ctx context.Context, providerName, model string, providers map[string]config.ProviderConfig, request ai.CommitRequest, message *string) (ai.ResolvedProvider, []string, error) {
+	if !isAutoProvider(providerName) {
+		provider, resolved, err := ai.NewProvider(ai.FactoryConfig{
+			Provider:  providerName,
+			Model:     model,
+			Providers: providers,
+		})
+		if err != nil {
+			return ai.ResolvedProvider{}, nil, err
+		}
+		generated, err := provider.GenerateCommitMessage(ctx, request)
+		if err != nil {
+			return ai.ResolvedProvider{}, nil, err
+		}
+		*message = generated
+		return resolved, nil, nil
+	}
+
+	var failures []string
+	for _, candidate := range ai.AutoProviderCandidates(providers) {
+		provider, resolved, err := ai.NewProvider(ai.FactoryConfig{
+			Provider:  candidate,
+			Model:     model,
+			Providers: providers,
+		})
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", candidate, err))
+			continue
+		}
+		generated, err := provider.GenerateCommitMessage(ctx, request)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", resolved.Name, err))
+			continue
+		}
+		*message = generated
+		return resolved, autoFallbackWarnings(failures, resolved.Name), nil
+	}
+	if len(failures) == 0 {
+		return ai.ResolvedProvider{}, nil, errors.New("no auto providers are available")
+	}
+	return ai.ResolvedProvider{}, nil, fmt.Errorf("all auto providers failed: %s", strings.Join(failures, "; "))
+}
+
+func isAutoProvider(providerName string) bool {
+	providerName = strings.TrimSpace(providerName)
+	return providerName == "" || providerName == "auto"
+}
+
+func autoFallbackWarnings(failures []string, selected string) []string {
+	if len(failures) == 0 {
+		return nil
+	}
+	warnings := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		warnings = append(warnings, fmt.Sprintf("auto provider fallback: %s; using %s", failure, selected))
+	}
+	return warnings
 }
 
 func RunPush(ctx context.Context, opts PushOptions) (PushResult, error) {

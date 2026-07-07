@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/CoolBanHub/aicommit/internal/config"
@@ -121,6 +122,25 @@ func resolveAutoProvider(providers map[string]config.ProviderConfig) string {
 		return "deepseek"
 	}
 	return "openai"
+}
+
+func AutoProviderCandidates(providers map[string]config.ProviderConfig) []string {
+	candidates := make([]string, 0, 5)
+	if _, err := exec.LookPath("claude"); err == nil {
+		candidates = append(candidates, "claude-code")
+	}
+	if _, err := exec.LookPath("codex"); err == nil {
+		candidates = append(candidates, "codex")
+	}
+	for _, name := range []string{"openai", "anthropic", "deepseek"} {
+		if cfg, ok := providers[name]; ok && providerConfiguredForHTTP(name, cfg) {
+			candidates = append(candidates, name)
+		}
+	}
+	if len(candidates) == 0 {
+		candidates = append(candidates, "openai")
+	}
+	return slices.Compact(candidates)
 }
 
 func providerConfiguredForHTTP(name string, cfg config.ProviderConfig) bool {

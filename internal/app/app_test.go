@@ -234,6 +234,74 @@ generated:
 	}
 }
 
+func TestRunCommitAutoFallsBackFromClaudeCodeToCodex(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	binDir := t.TempDir()
+	writeExecutableScript(t, binDir, "claude", `#!/bin/sh
+printf '%s\n' '{"type":"result","is_error":true,"result":"API Error: Request rejected (429)"}'
+exit 1
+`)
+	writeExecutableScript(t, binDir, "codex", `#!/bin/sh
+output=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+printf '%s\n' '{"message":"fix: update refund price"}' > "$output"
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	writeFile(t, repo, "refund.go", "package refund\n")
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		DryRun:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Provider != "codex" {
+		t.Fatalf("expected codex fallback, got %q", result.Provider)
+	}
+	if result.Message != "fix: update refund price" {
+		t.Fatalf("unexpected message %q", result.Message)
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "API Error: Request rejected (429)") {
+		t.Fatalf("expected claude failure warning, got %#v", result.Warnings)
+	}
+}
+
+func TestRunCommitExplicitClaudeCodeDoesNotFallback(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	binDir := t.TempDir()
+	writeExecutableScript(t, binDir, "claude", `#!/bin/sh
+printf '%s\n' '{"type":"result","is_error":true,"result":"API Error: Request rejected (429)"}'
+exit 1
+`)
+	writeExecutableScript(t, binDir, "codex", `#!/bin/sh
+printf '%s\n' '{"message":"fix: should not be used"}'
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	writeFile(t, repo, "refund.go", "package refund\n")
+
+	_, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Provider:   "claude-code",
+		DryRun:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "API Error: Request rejected (429)") {
+		t.Fatalf("expected explicit claude failure, got %v", err)
+	}
+}
+
 func TestRunCommitDoesNotAutoIgnoreLargeTextDocuments(t *testing.T) {
 	repo := initGitRepo(t)
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -486,6 +554,15 @@ func writeBytes(t *testing.T, repo, rel string, contents []byte) {
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeExecutableScript(t *testing.T, dir, name, contents string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func runGit(t *testing.T, repo string, args ...string) {

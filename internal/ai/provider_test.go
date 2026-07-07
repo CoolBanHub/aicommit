@@ -48,6 +48,26 @@ func TestResolveAutoProviderPrefersClaudeCodeThenCodex(t *testing.T) {
 	}
 }
 
+func TestAutoProviderCandidatesIncludeClaudeThenCodex(t *testing.T) {
+	tempDir := t.TempDir()
+	writeExecutable(t, tempDir, "claude")
+	writeExecutable(t, tempDir, "codex")
+	t.Setenv("PATH", tempDir)
+
+	got := AutoProviderCandidates(map[string]config.ProviderConfig{})
+	want := []string{"claude-code", "codex"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected providers %#v", got)
+	}
+}
+
+func TestCommandFailureDetailsUsesStructuredStdout(t *testing.T) {
+	got := commandFailureDetails(`{"type":"result","is_error":true,"result":"API Error: Request rejected (429)"}`, "")
+	if got != "API Error: Request rejected (429)" {
+		t.Fatalf("unexpected details %q", got)
+	}
+}
+
 func TestResolveAutoProviderFallsBackToCodexWhenClaudeMissing(t *testing.T) {
 	tempDir := t.TempDir()
 	writeExecutable(t, tempDir, "codex")

@@ -155,12 +155,64 @@ func runCommandWithInput(ctx context.Context, dir, name string, args []string, i
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("%s failed: %w: %s", name, err, strings.TrimSpace(stderr.String()))
+		return "", fmt.Errorf("%s failed: %w: %s", name, err, commandFailureDetails(stdout.String(), stderr.String()))
 	}
 	if stdout.Len() == 0 && stderr.Len() > 0 {
 		return stderr.String(), nil
 	}
 	return stdout.String(), nil
+}
+
+func commandFailureDetails(stdout, stderr string) string {
+	stderr = strings.TrimSpace(stderr)
+	stdout = strings.TrimSpace(stdout)
+	if parsed := structuredErrorMessage(stdout); parsed != "" {
+		stdout = parsed
+	}
+	if stderr != "" && stdout != "" {
+		return truncateCommandOutput(stderr + "\n" + stdout)
+	}
+	if stderr != "" {
+		return truncateCommandOutput(stderr)
+	}
+	if stdout != "" {
+		return truncateCommandOutput(stdout)
+	}
+	return "no error output"
+}
+
+func structuredErrorMessage(text string) string {
+	if text == "" {
+		return ""
+	}
+	var generic map[string]any
+	if err := json.Unmarshal([]byte(text), &generic); err != nil {
+		return ""
+	}
+	if value, ok := generic["error"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if nested, ok := generic["error"].(map[string]any); ok {
+		for _, key := range []string{"message", "detail", "type"} {
+			if value, ok := nested[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	for _, key := range []string{"result", "message", "content", "text"} {
+		if value, ok := generic[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func truncateCommandOutput(text string) string {
+	const maxErrorOutput = 4000
+	if len(text) <= maxErrorOutput {
+		return text
+	}
+	return strings.TrimSpace(text[:maxErrorOutput]) + "... (truncated)"
 }
 
 func compactJSON(text string) string {
