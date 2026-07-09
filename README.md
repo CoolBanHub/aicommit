@@ -81,6 +81,8 @@ go build -o aicommit ./cmd/aicommit
 ./aicommit commit --provider codex
 ./aicommit commit --provider claude-code --dry-run
 ./aicommit commit --provider cdp
+./aicommit commit --push
+./aicommit commit push
 ./aicommit push
 ./aicommit tag
 ./aicommit tag --push
@@ -97,8 +99,19 @@ go build -o aicommit ./cmd/aicommit
 5. 将缓存的 diff 发送给选定的 AI 提供商
 6. 运行 `git commit -m <生成的提交信息>`
 
-默认情况下不会推送。使用 `aicommit push` 来推送当前分支的所有本地提交。
+默认情况下不会推送。使用 `aicommit commit --push` 或 `aicommit commit push` 可在提交成功后立即推送；
+也可以使用 `aicommit push` 来只推送当前分支的所有本地提交。
 如需自动推送，可在配置中设置 `push: auto` 或 `push: always`。
+
+如果推送因为当前分支落后远端而被拒绝，`aicommit push` 会在工作区干净时尝试自动恢复：
+先获取远端分支；如果本地只是落后远端，会直接快进。否则以不提交的方式合并远端分支。
+遇到冲突时会先使用内置 repair agent：AI provider 每次返回一个受限动作，`aicommit` 负责读文件、写文件、列目录或运行受限的 `go`/`git` 命令，
+因此 OpenAI/Anthropic/OpenAI-compatible 这类 API provider 也可以逐步处理简单冲突和验证错误。若 agent 处理不了，会回退到一次性整文件 JSON 修复；
+`go.sum` 和 `*.pb.go` 属于可生成/派生文件，不会发送给 AI；发生冲突时会直接使用当前分支版本，后续由 `go mod tidy` 或生成流程更新。
+如果 AI 都不可用或处理不了，且冲突只出现在根目录 `go.mod`，会使用内置 Go module 合并作为兜底。
+对于有根目录 `go.mod` 的仓库，会执行 `go mod tidy` 和 `go build ./...`；tidy/build 失败时也会先交给 repair agent/AI 尝试修复，
+如果失败原因是 Go module `unknown revision`，会先自动删除对应 require 并 `go get <module>` 刷新到可用版本，
+再次验证通过后才创建 merge commit 并重新推送。若工作区不干净、AI/兜底都处理不了，或最终验证仍失败，则停止并交给人工处理。
 
 ## 标签
 

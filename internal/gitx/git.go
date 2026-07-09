@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -178,6 +179,10 @@ func StatusPaths(ctx context.Context, repo string) ([]string, error) {
 	return parsePorcelainZ(out), nil
 }
 
+func StatusShort(ctx context.Context, repo string) (string, error) {
+	return run(ctx, repo, "status", "--short", "--untracked-files=all")
+}
+
 func StagedPaths(ctx context.Context, repo string) ([]string, error) {
 	out, err := runBytes(ctx, repo, "diff", "--cached", "--name-only", "-z")
 	if err != nil {
@@ -212,6 +217,11 @@ func StagePaths(ctx context.Context, repo string, paths []string) error {
 		}
 	}
 	return nil
+}
+
+func StageAll(ctx context.Context, repo string) error {
+	_, err := run(ctx, repo, "add", "-A")
+	return err
 }
 
 func UnstagePath(ctx context.Context, repo, path string) error {
@@ -263,8 +273,25 @@ func Commit(ctx context.Context, repo, message string, disableGPGSign bool) erro
 	return err
 }
 
+func CommitNoEdit(ctx context.Context, repo string, disableGPGSign bool) error {
+	args := []string{"commit", "--no-edit"}
+	if disableGPGSign {
+		args = append([]string{"-c", "commit.gpgsign=false"}, args...)
+	}
+	_, err := run(ctx, repo, args...)
+	return err
+}
+
 func CommitHash(ctx context.Context, repo string) (string, error) {
 	out, err := run(ctx, repo, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func FullCommitHash(ctx context.Context, repo string) (string, error) {
+	out, err := run(ctx, repo, "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
@@ -327,6 +354,132 @@ func Push(ctx context.Context, repo string) (bool, string, string, error) {
 		return false, "", "", err
 	}
 	return true, remote + "/" + branch, "", nil
+}
+
+func IsNonFastForward(err error) bool {
+	var commandErr commandError
+	if !errors.As(err, &commandErr) {
+		return false
+	}
+	args := " " + strings.Join(commandErr.args, " ") + " "
+	if !strings.Contains(args, " push ") {
+		return false
+	}
+	output := strings.ToLower(commandErr.output)
+	return strings.Contains(output, "non-fast-forward") ||
+		strings.Contains(output, "fetch first") ||
+		strings.Contains(output, "updates were rejected")
+}
+
+func IsClean(ctx context.Context, repo string) (bool, error) {
+	out, err := runBytes(ctx, repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	return len(out) == 0, nil
+}
+
+func FetchCurrentBranch(ctx context.Context, repo string) (string, error) {
+	branch, err := currentBranch(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if branch == "" {
+		return "", errors.New("cannot fetch remote changes from detached HEAD")
+	}
+	if upstream, err := run(ctx, repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err == nil && strings.TrimSpace(upstream) != "" {
+		if _, err := run(ctx, repo, "fetch"); err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(upstream), nil
+	}
+	remotes, err := remoteList(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	remote := chooseRemote(remotes)
+	if remote == "" {
+		return "", errors.New("no remote")
+	}
+	if _, err := run(ctx, repo, "fetch", remote, branch); err != nil {
+		return "", err
+	}
+	return "FETCH_HEAD", nil
+}
+
+func IsAncestor(ctx context.Context, repo, ancestor, descendant string) (bool, error) {
+	args := []string{"merge-base", "--is-ancestor", ancestor, descendant}
+	fullArgs := append([]string{"-C", repo}, args...)
+	cmd := exec.CommandContext(ctx, "git", fullArgs...)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, commandError{args: args, output: string(out), err: err}
+}
+
+func MergeFastForward(ctx context.Context, repo, ref string) error {
+	_, err := run(ctx, repo, "merge", "--ff-only", ref)
+	return err
+}
+
+func MergeNoCommit(ctx context.Context, repo, ref string) error {
+	_, err := run(ctx, repo, "merge", "--no-commit", "--no-ff", ref)
+	return err
+}
+
+func MergeRemoteCurrentBranchNoCommit(ctx context.Context, repo string) error {
+	ref, err := FetchCurrentBranch(ctx, repo)
+	if err != nil {
+		return err
+	}
+	return MergeNoCommit(ctx, repo, ref)
+}
+
+func UnmergedPaths(ctx context.Context, repo string) ([]string, error) {
+	out, err := runBytes(ctx, repo, "diff", "--name-only", "--diff-filter=U", "-z")
+	if err != nil {
+		return nil, err
+	}
+	return splitZ(out), nil
+}
+
+func IndexFileStage(ctx context.Context, repo string, stage int, path string) ([]byte, error) {
+	if stage < 1 || stage > 3 {
+		return nil, fmt.Errorf("invalid git index stage %d", stage)
+	}
+	return runBytes(ctx, repo, "show", fmt.Sprintf(":%d:%s", stage, path))
+}
+
+func IndexFileStages(ctx context.Context, repo, path string) (map[int]struct{}, error) {
+	out, err := runBytes(ctx, repo, "ls-files", "-u", "-z", "--", path)
+	if err != nil {
+		return nil, err
+	}
+	stages := map[int]struct{}{}
+	for _, entry := range bytes.Split(out, []byte{0}) {
+		if len(entry) == 0 {
+			continue
+		}
+		fields := strings.Fields(string(entry))
+		if len(fields) < 3 {
+			continue
+		}
+		stageText := fields[2]
+		if tab := strings.IndexByte(stageText, '\t'); tab >= 0 {
+			stageText = stageText[:tab]
+		}
+		stage, err := strconv.Atoi(stageText)
+		if err != nil {
+			continue
+		}
+		stages[stage] = struct{}{}
+	}
+	return stages, nil
 }
 
 func PushTag(ctx context.Context, repo, tag string) (bool, string, string, error) {

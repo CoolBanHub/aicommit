@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -503,6 +506,310 @@ func TestRunPushTagPushesSpecifiedTag(t *testing.T) {
 	}
 }
 
+func TestRunPushRecoversGoModConflictAndPushesMerge(t *testing.T) {
+	remote := initBareGitRepo(t)
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	runGit(t, repo, "checkout", "-B", "main")
+	runGit(t, repo, "remote", "add", "origin", remote)
+
+	writeFile(t, repo, "go.mod", "module example.com/app\n\ngo 1.23\n")
+	writeFile(t, repo, "app.go", "package app\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "push", "-u", "origin", "HEAD")
+
+	other := cloneGitRepo(t, remote)
+	runGit(t, other, "checkout", "main")
+	runGit(t, other, "config", "user.email", "tester@example.com")
+	runGit(t, other, "config", "user.name", "Tester")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+
+	writeFile(t, repo, "liba/go.mod", "module example.com/liba\n\ngo 1.23\n")
+	writeFile(t, repo, "liba/liba.go", "package liba\n\nfunc Name() string { return \"a\" }\n")
+	writeFile(t, repo, "a.go", "package app\n\nimport \"example.com/liba\"\n\nfunc A() string { return liba.Name() }\n")
+	writeFile(t, repo, "go.mod", `module example.com/app
+
+go 1.23
+
+require example.com/liba v0.0.0
+
+replace example.com/liba => ./liba
+`)
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "local module")
+
+	writeFile(t, other, "libb/go.mod", "module example.com/libb\n\ngo 1.23\n")
+	writeFile(t, other, "libb/libb.go", "package libb\n\nfunc Name() string { return \"b\" }\n")
+	writeFile(t, other, "b.go", "package app\n\nimport \"example.com/libb\"\n\nfunc B() string { return libb.Name() }\n")
+	writeFile(t, other, "go.mod", `module example.com/app
+
+go 1.23
+
+require example.com/libb v0.0.0
+
+replace example.com/libb => ./libb
+`)
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "remote module")
+	runGit(t, other, "push")
+
+	writeConfigFile(t, configPath, "provider: command\nproviders:\n  command:\n    type: command\n    command:\n      - "+quoteYAML(writeExecutableScript(t, t.TempDir(), "resolve-go-mod", `#!/bin/sh
+cat <<'JSON'
+{"canResolve":true,"reason":"merge both local module requirements","files":[{"path":"go.mod","content":"module example.com/app\n\ngo 1.23\n\nrequire (\n\texample.com/liba v0.0.0\n\texample.com/libb v0.0.0\n)\n\nreplace example.com/liba => ./liba\n\nreplace example.com/libb => ./libb\n"}]}
+JSON
+`))+"\n")
+
+	result, err := RunPush(context.Background(), PushOptions{Repo: repo, ConfigPath: configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Pushed {
+		t.Fatalf("expected push after recovery, got %#v", result)
+	}
+	if !result.Recovered {
+		t.Fatalf("expected recovered push, got %#v", result)
+	}
+	if result.RecoveryHash == "" {
+		t.Fatalf("expected recovery merge hash, got %#v", result)
+	}
+	if !contains(result.RecoverySteps, "resolved merge conflicts with AI") {
+		t.Fatalf("expected AI merge recovery step, got %#v", result.RecoverySteps)
+	}
+	if !contains(result.RecoverySteps, "ran go mod tidy") {
+		t.Fatalf("expected go mod tidy recovery step, got %#v", result.RecoverySteps)
+	}
+	if !contains(result.RecoverySteps, "verified go build ./...") {
+		t.Fatalf("expected go build recovery step, got %#v", result.RecoverySteps)
+	}
+
+	goMod := gitOutput(t, remote, "show", "main:go.mod")
+	for _, want := range []string{"example.com/liba", "example.com/libb", "example.com/liba => ./liba", "example.com/libb => ./libb"} {
+		if !strings.Contains(goMod, want) {
+			t.Fatalf("expected remote go.mod to contain %q, got:\n%s", want, goMod)
+		}
+	}
+	if strings.Contains(goMod, "<<<<<<<") {
+		t.Fatalf("conflict markers should not remain in go.mod:\n%s", goMod)
+	}
+	if got := strings.TrimSpace(gitOutput(t, repo, "status", "--porcelain=v1")); got != "" {
+		t.Fatalf("expected clean worktree after recovered push, got:\n%s", got)
+	}
+	if got := strings.TrimSpace(gitOutput(t, remote, "log", "--merges", "--format=%s", "-1", "main")); !strings.HasPrefix(got, "Merge") {
+		t.Fatalf("expected merge commit on remote, got %q", got)
+	}
+}
+
+func TestRunPushUsesAIForNonGoMergeConflict(t *testing.T) {
+	remote := initBareGitRepo(t)
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	runGit(t, repo, "checkout", "-B", "main")
+	runGit(t, repo, "remote", "add", "origin", remote)
+
+	writeFile(t, repo, "notes.txt", "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "push", "-u", "origin", "HEAD")
+
+	other := cloneGitRepo(t, remote)
+	runGit(t, other, "checkout", "main")
+	runGit(t, other, "config", "user.email", "tester@example.com")
+	runGit(t, other, "config", "user.name", "Tester")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+
+	writeFile(t, repo, "notes.txt", "base\nlocal\n")
+	runGit(t, repo, "add", "notes.txt")
+	runGit(t, repo, "commit", "-m", "local notes")
+
+	writeFile(t, other, "notes.txt", "base\nremote\n")
+	runGit(t, other, "add", "notes.txt")
+	runGit(t, other, "commit", "-m", "remote notes")
+	runGit(t, other, "push")
+
+	writeConfigFile(t, configPath, "provider: command\nproviders:\n  command:\n    type: command\n    command:\n      - "+quoteYAML(writeExecutableScript(t, t.TempDir(), "resolve-notes", `#!/bin/sh
+cat <<'JSON'
+{"canResolve":true,"reason":"keep both note lines","files":[{"path":"notes.txt","content":"base\nlocal\nremote\n"}]}
+JSON
+`))+"\n")
+
+	result, err := RunPush(context.Background(), PushOptions{Repo: repo, ConfigPath: configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Pushed || !result.Recovered {
+		t.Fatalf("expected AI recovered push, got %#v", result)
+	}
+	if !contains(result.RecoverySteps, "resolved merge conflicts with AI") {
+		t.Fatalf("expected AI merge recovery step, got %#v", result.RecoverySteps)
+	}
+	if got := gitOutput(t, remote, "show", "main:notes.txt"); got != "base\nlocal\nremote\n" {
+		t.Fatalf("unexpected remote notes content %q", got)
+	}
+}
+
+func TestRunPushUsesBuiltInRepairAgentActions(t *testing.T) {
+	remote := initBareGitRepo(t)
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	runGit(t, repo, "checkout", "-B", "main")
+	runGit(t, repo, "remote", "add", "origin", remote)
+
+	writeFile(t, repo, "notes.txt", "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "push", "-u", "origin", "HEAD")
+
+	other := cloneGitRepo(t, remote)
+	runGit(t, other, "checkout", "main")
+	runGit(t, other, "config", "user.email", "tester@example.com")
+	runGit(t, other, "config", "user.name", "Tester")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+
+	writeFile(t, repo, "notes.txt", "base\nlocal\n")
+	runGit(t, repo, "add", "notes.txt")
+	runGit(t, repo, "commit", "-m", "local notes")
+
+	writeFile(t, other, "notes.txt", "base\nremote\n")
+	runGit(t, other, "add", "notes.txt")
+	runGit(t, other, "commit", "-m", "remote notes")
+	runGit(t, other, "push")
+
+	statePath := filepath.Join(t.TempDir(), "agent-state")
+	t.Setenv("AICOMMIT_AGENT_STATE", statePath)
+	script := writeExecutableScript(t, t.TempDir(), "repair-agent", `#!/bin/sh
+step="$(cat "$AICOMMIT_AGENT_STATE" 2>/dev/null || true)"
+case "$step" in
+  "")
+    echo read > "$AICOMMIT_AGENT_STATE"
+    cat <<'JSON'
+{"action":"read_file","path":"notes.txt"}
+JSON
+    ;;
+  read)
+    echo write > "$AICOMMIT_AGENT_STATE"
+    cat <<'JSON'
+{"action":"write_file","path":"notes.txt","content":"base\nlocal\nremote\n"}
+JSON
+    ;;
+  *)
+    cat <<'JSON'
+{"action":"finish","repaired":true,"reason":"merged notes through built-in agent"}
+JSON
+    ;;
+esac
+`)
+	writeConfigFile(t, configPath, "provider: command\nproviders:\n  command:\n    type: command\n    command:\n      - "+quoteYAML(script)+"\n")
+
+	result, err := RunPush(context.Background(), PushOptions{Repo: repo, ConfigPath: configPath})
+	if err != nil {
+		state, _ := os.ReadFile(statePath)
+		t.Fatalf("%v\nagent state: %q\nstatus:\n%s", err, strings.TrimSpace(string(state)), gitOutput(t, repo, "status", "--porcelain=v1"))
+	}
+	if !result.Pushed || !result.Recovered {
+		t.Fatalf("expected built-in agent recovered push, got %#v", result)
+	}
+	if !contains(result.RecoverySteps, "resolved merge conflicts with AI") {
+		t.Fatalf("expected AI merge recovery step, got %#v", result.RecoverySteps)
+	}
+	if got := gitOutput(t, remote, "show", "main:notes.txt"); got != "base\nlocal\nremote\n" {
+		t.Fatalf("unexpected remote notes content %q", got)
+	}
+	if got := strings.TrimSpace(readFile(t, statePath)); got != "write" {
+		t.Fatalf("expected repair agent to execute read and write actions, got state %q", got)
+	}
+}
+
+func TestRunPushKeepsDerivedConflictsOutOfAI(t *testing.T) {
+	remote := initBareGitRepo(t)
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	promptPath := filepath.Join(t.TempDir(), "prompt.txt")
+	runGit(t, repo, "checkout", "-B", "main")
+	runGit(t, repo, "remote", "add", "origin", remote)
+
+	writeFile(t, repo, "module.txt", "base\n")
+	writeFile(t, repo, "go.sum", "base sum\n")
+	writeFile(t, repo, "internal/conf/conf.pb.go", "package conf\n\nconst Source = \"base\"\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "push", "-u", "origin", "HEAD")
+
+	other := cloneGitRepo(t, remote)
+	runGit(t, other, "checkout", "main")
+	runGit(t, other, "config", "user.email", "tester@example.com")
+	runGit(t, other, "config", "user.name", "Tester")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+
+	writeFile(t, repo, "module.txt", "base\nlocal\n")
+	writeFile(t, repo, "go.sum", "local sum\n")
+	writeFile(t, repo, "internal/conf/conf.pb.go", "package conf\n\nconst Source = \"local\"\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "local changes")
+
+	writeFile(t, other, "module.txt", "base\nremote\n")
+	writeFile(t, other, "go.sum", "remote sum\n")
+	writeFile(t, other, "internal/conf/conf.pb.go", "package conf\n\nconst Source = \"remote\"\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "remote changes")
+	runGit(t, other, "push")
+
+	t.Setenv("AICOMMIT_PROMPT_PATH", promptPath)
+	writeConfigFile(t, configPath, "provider: command\nproviders:\n  command:\n    type: command\n    command:\n      - "+quoteYAML(writeExecutableScript(t, t.TempDir(), "resolve-filtered", `#!/bin/sh
+cat > "$AICOMMIT_PROMPT_PATH"
+if grep -q -- '--- FILE go.sum' "$AICOMMIT_PROMPT_PATH" || grep -q -- '--- FILE internal/conf/conf.pb.go' "$AICOMMIT_PROMPT_PATH"; then
+  cat <<'JSON'
+{"canResolve":false,"reason":"derived file was sent to AI"}
+JSON
+  exit 0
+fi
+cat <<'JSON'
+{"canResolve":true,"reason":"merge non-derived file only","files":[{"path":"module.txt","content":"base\nlocal\nremote\n"}]}
+JSON
+`))+"\n")
+
+	result, err := RunPush(context.Background(), PushOptions{Repo: repo, ConfigPath: configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Pushed || !result.Recovered {
+		t.Fatalf("expected recovered push, got %#v", result)
+	}
+	if !containsPrefix(result.RecoverySteps, "resolved derived conflicts with current branch:") {
+		t.Fatalf("expected derived conflict recovery step, got %#v", result.RecoverySteps)
+	}
+	if got := gitOutput(t, remote, "show", "main:module.txt"); got != "base\nlocal\nremote\n" {
+		t.Fatalf("unexpected module.txt content %q", got)
+	}
+	if got := gitOutput(t, remote, "show", "main:go.sum"); got != "local sum\n" {
+		t.Fatalf("expected go.sum from current branch, got %q", got)
+	}
+	if got := gitOutput(t, remote, "show", "main:internal/conf/conf.pb.go"); got != "package conf\n\nconst Source = \"local\"\n" {
+		t.Fatalf("expected pb.go from current branch, got %q", got)
+	}
+	prompt := readFile(t, promptPath)
+	if strings.Contains(prompt, "--- FILE go.sum") || strings.Contains(prompt, "--- FILE internal/conf/conf.pb.go") {
+		t.Fatalf("derived files should not be sent to AI prompt:\n%s", prompt)
+	}
+}
+
+func TestUnknownRevisionModulesParsesGoOutput(t *testing.T) {
+	err := goCommandError{
+		args: []string{"mod", "tidy"},
+		output: `go: git.ikuban.com/server/wxbot-wxprotocol/cmd/server imports
+        git.ikuban.com/server/kratos-utils/common: git.ikuban.com/server/kratos-utils@v1.0.1-0.20251208073058-adf7dde65a09: invalid version: unknown revision adf7dde65a09
+go: other imports
+        git.ikuban.com/server/kratos-utils/log: git.ikuban.com/server/kratos-utils@v1.0.1-0.20251208073058-adf7dde65a09: invalid version: unknown revision adf7dde65a09
+`,
+		err: errors.New("exit status 1"),
+	}
+	got := unknownRevisionModules(err)
+	want := []string{"git.ikuban.com/server/kratos-utils"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unknownRevisionModules() = %#v, want %#v", got, want)
+	}
+}
+
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -520,6 +827,17 @@ func initBareGitRepo(t *testing.T) string {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git init --bare failed: %v\n%s", err, string(out))
+	}
+	return repo
+}
+
+func cloneGitRepo(t *testing.T, remote string) string {
+	t.Helper()
+	repo := filepath.Join(t.TempDir(), "repo")
+	cmd := exec.Command("git", "clone", "-q", remote, repo)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git clone failed: %v\n%s", err, string(out))
 	}
 	return repo
 }
@@ -554,6 +872,15 @@ func writeBytes(t *testing.T, repo, rel string, contents []byte) {
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func writeExecutableScript(t *testing.T, dir, name, contents string) string {
@@ -596,4 +923,17 @@ func contains(items []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func containsPrefix(items []string, prefix string) bool {
+	for _, item := range items {
+		if strings.HasPrefix(item, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func quoteYAML(value string) string {
+	return strconv.Quote(value)
 }

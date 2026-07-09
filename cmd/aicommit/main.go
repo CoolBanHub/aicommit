@@ -103,6 +103,7 @@ func runCommit(ctx context.Context, args []string) error {
 	fs.Var(&includes, "include", "glob to force-include a path; repeatable")
 	fs.Var(&excludes, "exclude", "glob to exclude a path; repeatable")
 
+	args = normalizeCommitArgs(args)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -151,11 +152,52 @@ func runCommit(ctx context.Context, args []string) error {
 	printWarnings(result)
 	printSkipped(result)
 	if result.Pushed {
+		if result.PushRecovered {
+			fmt.Printf("Recovered non-fast-forward push with merge commit %s\n", result.PushRecoveryHash)
+		}
 		fmt.Printf("Pushed to %s\n", result.PushTarget)
 	} else if result.PushSkippedReason != "" {
 		fmt.Printf("Push skipped: %s\n", result.PushSkippedReason)
 	}
 	return nil
+}
+
+func normalizeCommitArgs(args []string) []string {
+	normalized := make([]string, 0, len(args))
+	expectValue := false
+	for _, arg := range args {
+		if expectValue {
+			normalized = append(normalized, arg)
+			expectValue = false
+			continue
+		}
+		switch arg {
+		case "push":
+			normalized = append(normalized, "--push")
+		case "no-push":
+			normalized = append(normalized, "--no-push")
+		default:
+			normalized = append(normalized, arg)
+			expectValue = commitFlagTakesValue(arg)
+		}
+	}
+	return normalized
+}
+
+func commitFlagTakesValue(arg string) bool {
+	if !strings.HasPrefix(arg, "-") || arg == "-" {
+		return false
+	}
+	name := strings.TrimLeft(arg, "-")
+	if name == "" || strings.Contains(name, "=") {
+		return false
+	}
+	switch name {
+	case "repo", "config", "provider", "model", "message", "style", "max-diff-chars", "max-file-bytes", "include", "exclude":
+		return true
+	default:
+		return false
+	}
 }
 
 func runPush(ctx context.Context, args []string) error {
@@ -165,6 +207,9 @@ func runPush(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&opts.Repo, "repo", ".", "target git repository")
+	fs.StringVar(&opts.ConfigPath, "config", "", "config file path, defaults to .aicommit.json or ~/.aicommit.json")
+	fs.StringVar(&opts.Provider, "provider", "", "provider: auto, openai, deepseek, anthropic, codex, claude-code, cdp, command")
+	fs.StringVar(&opts.Model, "model", "", "provider model override")
 	fs.BoolVar(&outputJSON, "json", false, "print JSON result")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -183,6 +228,9 @@ func runPush(ctx context.Context, args []string) error {
 		return enc.Encode(result)
 	}
 	if result.Pushed {
+		if result.Recovered {
+			fmt.Printf("Recovered non-fast-forward push with merge commit %s\n", result.RecoveryHash)
+		}
 		fmt.Printf("Pushed to %s\n", result.Target)
 	} else if result.SkippedReason != "" {
 		fmt.Printf("Push skipped: %s\n", result.SkippedReason)
