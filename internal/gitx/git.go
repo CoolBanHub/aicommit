@@ -86,9 +86,22 @@ func AppendGitignorePatterns(repo string, patterns []string) (bool, error) {
 		return false, err
 	}
 	existing := map[string]struct{}{}
+	inDetectedSection := false
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == addedByAicommitHeader {
+			inDetectedSection = true
+			continue
+		}
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			if inDetectedSection {
+				if approved := commentedDetectedGitignorePattern(line); approved != "" {
+					existing[approved] = struct{}{}
+				}
+			}
 			continue
 		}
 		existing[line] = struct{}{}
@@ -139,27 +152,97 @@ func RepairAicommitGitignore(repo string) (bool, error) {
 	}
 
 	lines := strings.Split(string(data), "\n")
+	approved := map[string]struct{}{}
 	inDetectedSection := false
-	changed := false
-	for i, line := range lines {
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == addedByAicommitHeader {
 			inDetectedSection = true
 			continue
 		}
+		if !inDetectedSection {
+			continue
+		}
+		if pattern := commentedDetectedGitignorePattern(trimmed); pattern != "" {
+			approved[pattern] = struct{}{}
+		}
+	}
+
+	inDetectedSection = false
+	changed := false
+	repairedLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == addedByAicommitHeader {
+			inDetectedSection = true
+			repairedLines = append(repairedLines, line)
+			continue
+		}
 		if !inDetectedSection || trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			repairedLines = append(repairedLines, line)
 			continue
 		}
 		normalized := detectedGitignorePattern(line)
+		if _, explicitlyAllowed := approved[normalized]; explicitlyAllowed {
+			changed = true
+			continue
+		}
 		if normalized != line {
-			lines[i] = normalized
+			line = normalized
 			changed = true
 		}
+		repairedLines = append(repairedLines, line)
 	}
 	if !changed {
 		return false, nil
 	}
-	return true, os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+	return true, os.WriteFile(path, []byte(strings.Join(repairedLines, "\n")), 0o644)
+}
+
+// AicommitGitignoreAllowPatterns returns auto-detected paths that the user has
+// explicitly allowed by commenting their rule in aicommit's managed section.
+func AicommitGitignoreAllowPatterns(repo string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if err != nil {
+		return nil, err
+	}
+
+	seen := map[string]struct{}{}
+	var patterns []string
+	inDetectedSection := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == addedByAicommitHeader {
+			inDetectedSection = true
+			continue
+		}
+		if !inDetectedSection {
+			continue
+		}
+		pattern := commentedDetectedGitignorePattern(trimmed)
+		if pattern == "" {
+			continue
+		}
+		pattern = strings.TrimPrefix(pattern, "/")
+		if _, ok := seen[pattern]; ok {
+			continue
+		}
+		seen[pattern] = struct{}{}
+		patterns = append(patterns, pattern)
+	}
+	return patterns, nil
+}
+
+func commentedDetectedGitignorePattern(line string) string {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "#") {
+		return ""
+	}
+	pattern := strings.TrimSpace(strings.TrimPrefix(line, "#"))
+	if !strings.HasPrefix(pattern, "/") {
+		return ""
+	}
+	return detectedGitignorePattern(pattern)
 }
 
 func detectedGitignorePattern(pattern string) string {
@@ -172,11 +255,19 @@ func detectedGitignorePattern(pattern string) string {
 }
 
 func StatusPaths(ctx context.Context, repo string) ([]string, error) {
+	paths, _, err := StatusPathSets(ctx, repo)
+	return paths, err
+}
+
+// StatusPathSets returns every changed path and the subset that still has
+// unstaged worktree changes. Untracked paths are included in both sets.
+func StatusPathSets(ctx context.Context, repo string) ([]string, []string, error) {
 	out, err := runBytes(ctx, repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return parsePorcelainZ(out), nil
+	paths, unstaged := parsePorcelainZPathSets(out)
+	return paths, unstaged, nil
 }
 
 func StatusShort(ctx context.Context, repo string) (string, error) {
@@ -598,9 +689,10 @@ func runRaw(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	return out, nil
 }
 
-func parsePorcelainZ(out []byte) []string {
+func parsePorcelainZPathSets(out []byte) ([]string, []string) {
 	entries := bytes.Split(out, []byte{0})
 	var paths []string
+	var unstaged []string
 	for i := 0; i < len(entries); i++ {
 		entry := entries[i]
 		if len(entry) < 4 {
@@ -611,12 +703,15 @@ func parsePorcelainZ(out []byte) []string {
 		path := string(entry[3:])
 		if path != "" {
 			paths = append(paths, path)
+			if y != ' ' {
+				unstaged = append(unstaged, path)
+			}
 		}
 		if x == 'R' || y == 'R' || x == 'C' || y == 'C' {
 			i++
 		}
 	}
-	return paths
+	return paths, unstaged
 }
 
 func splitZ(out []byte) []string {

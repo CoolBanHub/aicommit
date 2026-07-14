@@ -107,6 +107,109 @@ func TestRunCommitBlocksTrackedFileCoveredByGitignore(t *testing.T) {
 	}
 }
 
+func TestRunCommitAllowsBinaryFromCommentedManagedGitignoreRule(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	path := "src-tauri/icons/icon.png"
+
+	writeFile(t, repo, ".gitignore", `# Added by aicommit after detecting protected files
+#/src-tauri/icons/icon.png
+
+# Added by aicommit after detecting protected files
+/src-tauri/icons/icon.png
+`)
+	writeBytes(t, repo, path, []byte{0, 1, 2, 3})
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Message:    "Add application icon",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NoChanges {
+		t.Fatalf("expected commented rule to allow the binary file")
+	}
+	if !contains(result.Files, path) {
+		t.Fatalf("expected icon to be committed, got %#v", result.Files)
+	}
+	if result.Metadata["gitignoreRepaired"] != "true" {
+		t.Fatalf("expected duplicate active rule to be repaired, got %#v", result.Metadata)
+	}
+
+	headFiles := gitOutput(t, repo, "show", "--name-only", "--format=", "HEAD")
+	if !strings.Contains(headFiles, path) {
+		t.Fatalf("allowed icon was not committed:\n%s", headFiles)
+	}
+	gitignore := gitOutput(t, repo, "show", "HEAD:.gitignore")
+	if strings.Contains(gitignore, "\n/src-tauri/icons/icon.png\n") {
+		t.Fatalf("active ignore rule should not be present:\n%s", gitignore)
+	}
+	if !strings.Contains(gitignore, "\n#/src-tauri/icons/icon.png\n") {
+		t.Fatalf("commented allow rule should remain:\n%s", gitignore)
+	}
+}
+
+func TestRunCommitHandlesAlreadyStagedDeletion(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	path := "Wecom.GroupForwarder - bak/App.config"
+
+	writeFile(t, repo, ".gitignore", "# baseline\n")
+	writeFile(t, repo, path, "original\n")
+	runGit(t, repo, "add", ".gitignore", path)
+	runGit(t, repo, "commit", "-m", "initial")
+
+	if err := os.Remove(filepath.Join(repo, filepath.FromSlash(path))); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "-A", "--", path)
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Message:    "Remove backup project",
+		DryRun:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(result.Files, path) {
+		t.Fatalf("expected staged deletion in result files, got %#v", result.Files)
+	}
+	if got := gitOutput(t, repo, "status", "--porcelain=v1", "--", path); !strings.HasPrefix(got, "D ") {
+		t.Fatalf("expected deletion to remain staged, got %q", got)
+	}
+}
+
+func TestRunCommitStagesWorktreeChangeOnAlreadyStagedPath(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	writeFile(t, repo, ".gitignore", "# baseline\n")
+	writeFile(t, repo, "app.txt", "original\n")
+	runGit(t, repo, "add", ".gitignore", "app.txt")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	writeFile(t, repo, "app.txt", "staged\n")
+	runGit(t, repo, "add", "app.txt")
+	writeFile(t, repo, "app.txt", "latest\n")
+
+	_, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Message:    "Update app",
+		DryRun:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOutput(t, repo, "show", ":app.txt"); got != "latest\n" {
+		t.Fatalf("expected latest worktree content to be staged, got %q", got)
+	}
+}
+
 func TestRunCommitAnchorsDetectedRootBinaryWithoutIgnoringCommandSourceDir(t *testing.T) {
 	repo := initGitRepo(t)
 	configPath := filepath.Join(t.TempDir(), "config.yaml")

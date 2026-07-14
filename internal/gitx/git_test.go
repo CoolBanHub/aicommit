@@ -59,6 +59,49 @@ func TestRepairAicommitGitignoreAnchorsLegacyDetectedPaths(t *testing.T) {
 	}
 }
 
+func TestCommentedDetectedRuleAllowsPathAndRemovesActiveDuplicate(t *testing.T) {
+	repo := initRepo(t)
+	writeGitignore(t, repo, `#/outside-managed-section.bin
+# Added by aicommit after detecting protected files
+#/src-tauri/icons/icon.png
+
+# Added by aicommit after detecting protected files
+/src-tauri/icons/icon.png
+`)
+
+	repaired, err := RepairAicommitGitignore(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repaired {
+		t.Fatalf("expected active duplicate to be removed")
+	}
+
+	data := readGitignore(t, repo)
+	if strings.Contains(data, "\n/src-tauri/icons/icon.png\n") {
+		t.Fatalf("active duplicate should be removed, got:\n%s", data)
+	}
+	if !strings.Contains(data, "\n#/src-tauri/icons/icon.png\n") {
+		t.Fatalf("commented allow rule should be preserved, got:\n%s", data)
+	}
+
+	patterns, err := AicommitGitignoreAllowPatterns(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(patterns) != 1 || patterns[0] != "src-tauri/icons/icon.png" {
+		t.Fatalf("unexpected allow patterns: %#v", patterns)
+	}
+
+	updated, err := AppendGitignorePatterns(repo, []string{"src-tauri/icons/icon.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated {
+		t.Fatalf("commented allow rule should prevent the path from being re-added")
+	}
+}
+
 func initRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

@@ -127,12 +127,6 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 		return CommitResult{}, err
 	}
 
-	rules := filter.NewRules(filter.Options{
-		MaxFileBytes: cfg.MaxFileBytes,
-		Include:      append(append([]string{}, cfg.Protect.Include...), opts.IncludePatterns...),
-		Exclude:      append(append([]string{}, cfg.Protect.Exclude...), opts.ExcludePatterns...),
-	})
-
 	result := CommitResult{
 		RepoRoot: repoRoot,
 		DryRun:   opts.DryRun,
@@ -154,8 +148,19 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 	} else if repaired {
 		result.Metadata["gitignoreRepaired"] = "true"
 	}
+	gitignoreAllowPatterns, err := gitx.AicommitGitignoreAllowPatterns(repoRoot)
+	if err != nil {
+		return CommitResult{}, err
+	}
+	includePatterns := append(append([]string{}, cfg.Protect.Include...), opts.IncludePatterns...)
+	includePatterns = append(includePatterns, gitignoreAllowPatterns...)
+	rules := filter.NewRules(filter.Options{
+		MaxFileBytes: cfg.MaxFileBytes,
+		Include:      includePatterns,
+		Exclude:      append(append([]string{}, cfg.Protect.Exclude...), opts.ExcludePatterns...),
+	})
 
-	changed, err := gitx.StatusPaths(ctx, repoRoot)
+	changed, unstaged, err := gitx.StatusPathSets(ctx, repoRoot)
 	if err != nil {
 		return CommitResult{}, err
 	}
@@ -184,6 +189,10 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 			result.StagedProtected = appendDecision(result.StagedProtected, decision)
 		}
 	}
+	unstagedSet := map[string]struct{}{}
+	for _, path := range unstaged {
+		unstagedSet[path] = struct{}{}
+	}
 
 	var toStage []string
 	seenChanged := map[string]struct{}{}
@@ -204,7 +213,9 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 			}
 			continue
 		}
-		toStage = append(toStage, path)
+		if _, needsStaging := unstagedSet[path]; needsStaging {
+			toStage = append(toStage, path)
+		}
 	}
 
 	if updated, err := gitx.AppendGitignorePatterns(repoRoot, detectedIgnorePatterns); err != nil {

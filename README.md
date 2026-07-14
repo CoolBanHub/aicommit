@@ -181,6 +181,16 @@ export AICOMMIT_CDP_COMMAND='your-cdp-client generate-commit-message'
 当 `aicommit` 检测到未被 `.gitignore` 覆盖、且适合长期忽略的受保护文件时，它会将该具体路径追加到 `.gitignore`，
 并将更新后的 `.gitignore` 包含在提交中。仅因超过 `maxFileBytes` 被跳过的文本文件不会自动写入 `.gitignore`。
 
+如果某个自动添加的文件确实需要提交，直接在 `aicommit` 管理区中注释对应规则即可：
+
+```gitignore
+# Added by aicommit after detecting protected files
+#/src-tauri/icons/icon.png
+```
+
+这里的注释表示明确允许该文件；`aicommit` 不会再次添加同一路径，并会允许它通过二进制文件保护。
+该语义只适用于 `# Added by aicommit after detecting protected files` 后面的路径注释。
+
 默认保护包括：
 
 - `.env`、`.env.*`、`.npmrc`、私钥和凭证类文件
