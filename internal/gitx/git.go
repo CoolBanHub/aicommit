@@ -224,6 +224,9 @@ func AicommitGitignoreAllowPatterns(repo string) ([]string, error) {
 			continue
 		}
 		pattern = strings.TrimPrefix(pattern, "/")
+		if strings.HasSuffix(pattern, "/*") {
+			pattern = strings.TrimSuffix(pattern, "/*") + "/**"
+		}
 		if _, ok := seen[pattern]; ok {
 			continue
 		}

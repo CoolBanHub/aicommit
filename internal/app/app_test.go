@@ -151,6 +151,118 @@ func TestRunCommitAllowsBinaryFromCommentedManagedGitignoreRule(t *testing.T) {
 	}
 }
 
+func TestRunCommitCompactsFullyProtectedDirectoryInGitignore(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	writeFile(t, repo, ".gitignore", "# baseline\n")
+	writeFile(t, repo, "docs/guide.md", "# Guide\n")
+	writeBytes(t, repo, "docs/assets/aomiao-admin/one.png", []byte{0, 1, 2, 3})
+	writeBytes(t, repo, "docs/assets/aomiao-admin/two.png", []byte{0, 4, 5, 6})
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Message:    "docs: add guide",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NoChanges {
+		t.Fatalf("expected allowed documentation to be committed")
+	}
+
+	gitignore := gitOutput(t, repo, "show", "HEAD:.gitignore")
+	if !strings.Contains(gitignore, "\n/docs/assets/*\n") {
+		t.Fatalf("expected compacted directory rule, got:\n%s", gitignore)
+	}
+	for _, path := range []string{
+		"/docs/assets/aomiao-admin/one.png",
+		"/docs/assets/aomiao-admin/two.png",
+	} {
+		if strings.Contains(gitignore, "\n"+path+"\n") {
+			t.Fatalf("did not expect concrete rule %q after compaction:\n%s", path, gitignore)
+		}
+	}
+	if ignored := strings.TrimSpace(gitOutput(t, repo, "check-ignore", "docs/assets/aomiao-admin/one.png")); ignored != "docs/assets/aomiao-admin/one.png" {
+		t.Fatalf("expected compacted rule to ignore nested asset, got %q", ignored)
+	}
+}
+
+func TestRunCommitDoesNotCompactAcrossTrackedAllowedFile(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	writeFile(t, repo, ".gitignore", "# baseline\n")
+	writeFile(t, repo, "docs/assets/manifest.txt", "tracked metadata\n")
+	runGit(t, repo, "add", ".gitignore", "docs/assets/manifest.txt")
+	runGit(t, repo, "commit", "-m", "add asset manifest")
+
+	writeBytes(t, repo, "docs/assets/one.png", []byte{0, 1, 2, 3})
+	writeBytes(t, repo, "docs/assets/two.png", []byte{0, 4, 5, 6})
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Message:    "chore: protect generated assets",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NoChanges {
+		t.Fatalf("expected concrete ignore rules to be committed")
+	}
+
+	gitignore := gitOutput(t, repo, "show", "HEAD:.gitignore")
+	if strings.Contains(gitignore, "\n/docs/assets/*\n") {
+		t.Fatalf("tracked allowed file should prevent directory compaction:\n%s", gitignore)
+	}
+	for _, path := range []string{"/docs/assets/one.png", "/docs/assets/two.png"} {
+		if !strings.Contains(gitignore, "\n"+path+"\n") {
+			t.Fatalf("expected concrete rule %q, got:\n%s", path, gitignore)
+		}
+	}
+}
+
+func TestRunCommitAllowsNestedBinaryFromCommentedManagedDirectoryRule(t *testing.T) {
+	repo := initGitRepo(t)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	path := "docs/assets/aomiao-admin/icon.png"
+
+	writeFile(t, repo, ".gitignore", `# Added by aicommit after detecting protected files
+#/docs/assets/*
+
+# Added by aicommit after detecting protected files
+/docs/assets/*
+`)
+	writeBytes(t, repo, path, []byte{0, 1, 2, 3})
+
+	result, err := RunCommit(context.Background(), CommitOptions{
+		Repo:       repo,
+		ConfigPath: configPath,
+		Message:    "docs: add application icon",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NoChanges {
+		t.Fatalf("expected commented directory rule to allow the binary file")
+	}
+	if !contains(result.Files, path) {
+		t.Fatalf("expected nested icon to be committed, got %#v", result.Files)
+	}
+	if result.Metadata["gitignoreRepaired"] != "true" {
+		t.Fatalf("expected active directory duplicate to be repaired, got %#v", result.Metadata)
+	}
+	gitignore := gitOutput(t, repo, "show", "HEAD:.gitignore")
+	if !strings.Contains(gitignore, "\n#/docs/assets/*\n") {
+		t.Fatalf("commented directory rule should remain:\n%s", gitignore)
+	}
+	if strings.Contains(gitignore, "\n/docs/assets/*\n") {
+		t.Fatalf("active directory duplicate should be removed:\n%s", gitignore)
+	}
+}
+
 func TestRunCommitHandlesAlreadyStagedDeletion(t *testing.T) {
 	repo := initGitRepo(t)
 	configPath := filepath.Join(t.TempDir(), "config.yaml")

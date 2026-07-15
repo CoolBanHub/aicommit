@@ -218,6 +218,7 @@ func RunCommit(ctx context.Context, opts CommitOptions) (CommitResult, error) {
 		}
 	}
 
+	detectedIgnorePatterns = gitx.CompactDetectedGitignorePatterns(ctx, repoRoot, detectedIgnorePatterns, includePatterns)
 	if updated, err := gitx.AppendGitignorePatterns(repoRoot, detectedIgnorePatterns); err != nil {
 		return CommitResult{}, err
 	} else if updated {
